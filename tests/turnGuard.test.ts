@@ -4,6 +4,7 @@ import { installMockApi, tokenize, type MockOptions } from './helpers/mockApi.ts
 import { registerTurnGuard, runRefereeTest } from '../src/guard/turnGuard.ts'
 import { GAME_FRAMING } from '../src/guard/rules.ts'
 import { KEYS } from '../src/keys.ts'
+import { INV, addItem, initInventory } from '../src/state/inventory.ts'
 
 type Mock = ReturnType<typeof installMockApi>
 
@@ -52,6 +53,28 @@ describe('turn guard', () => {
     )
     assert.equal(mock.last.context?.[0].content, `You are Xialong.\n\n${GAME_FRAMING}`)
     assert.ok((mock.last.contextLimitReduction ?? 0) > 100)
+  })
+
+  it('adds the inventory between your action and the rules, and makes room for it', async () => {
+    const mock = await setup()
+    await initInventory()
+    await turn(mock, 'You drink the ale.', 'The ale is warm.')
+    const withoutItems = mock.last.contextLimitReduction ?? 0
+    assert.doesNotMatch(mock.last.context?.[3].content ?? '', /Game state/)
+
+    const id = await addItem()
+    mock.story.set(INV.item(id, 'name'), 'rope')
+    mock.story.set(INV.amount, 45)
+    await turn(mock, 'You buy a rug.', 'The merchant names a price.')
+    assert.match(
+      mock.last.context?.[3].content ?? '',
+      /^The player's action:\nYou buy a rug\.\n\nGame state \(keep the story consistent with it\):\n- Money: 45 gold\.\n- Typical prices in gold: .*a rug or simple tools 30.*\n- Carrying: rope\.\n\nNarrate what happens/,
+    )
+    assert.ok((mock.last.contextLimitReduction ?? 0) > withoutItems + 40)
+
+    mock.story.set(INV.share, false)
+    await turn(mock, 'You wait.', 'Time passes.')
+    assert.doesNotMatch(mock.last.context?.[3].content ?? '', /Game state/)
   })
 
   it('keeps a reply that stays on the right side of the line', async () => {

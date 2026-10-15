@@ -4,11 +4,11 @@ A NovelAI user script for Text Adventure mode on Xialong or GLM 4.6:
 
 - **Stops at your turn.** The AI writes what happens because of your action, then stops. It doesn't write your character's words, thoughts, decisions or new actions, and it never asks "What do you do?"
 - **Party tab** in the bottom bar, fed into the story context. *(Phase 3)*
-- **Inventory tab** in the bottom bar, fed into the story context. *(Phase 2)*
+- **Inventory tab** in the bottom bar: money in your own currency with a price guide, and items, fed into the story context.
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.2.6, Phase 1 (the turn guard)
+## Status: v0.3.0, Phase 2 (the Inventory tab)
 
 How each turn works:
 
@@ -18,7 +18,16 @@ How each turn works:
    - **the referee**, a quick second AI call, catches the subtle ones, like an unattributed line of your speech or an unmarked thought.
 3. **The cut.** Only the text before the first overstep reaches the editor. It's a normal generation, so Undo and Retry work as usual. If the very first sentence oversteps, nothing is added and the script asks the AI again automatically, up to twice.
 
-The Party and Inventory tabs are still placeholders.
+The Party tab is still a placeholder.
+
+## Inventory tab (bottom bar)
+
+- **Money**: the amount (type it or use − and +) and the **currency** name your world uses.
+- **Price guide**: typical prices in your currency, one per line, like `a hot meal: 2`. It starts with a typical fantasy scale; adjust it to your world. The AI is told to keep every price in line with it, so a rug costs about 30, not 300.
+- **Items**: name, quantity, **Equipped**, and an optional note that the AI sees while the item is equipped (`notched blade`).
+- **What the AI sees** shows exactly what is sent with each turn. **Tell the AI about my inventory** turns sending off.
+
+Update the tab yourself as you buy, find or use things; nothing is tracked automatically yet.
 
 ## Install
 

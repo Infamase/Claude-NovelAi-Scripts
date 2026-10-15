@@ -45,6 +45,7 @@ export function installMockApi(options: MockOptions = {}) {
     v1: {
       script: { version: '0.0.0-test', getAllowedOutput: () => 2048 },
       log: () => {},
+      uuid: () => crypto.randomUUID(),
       error: (...messages: unknown[]) => console.error(...messages),
       hooks: { register: (name: string, callback: (params: any) => any) => void (hooks[name] = callback) },
       storage: storage(account),

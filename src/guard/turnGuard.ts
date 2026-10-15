@@ -9,6 +9,7 @@
 import { KEYS, logError } from '../keys.ts'
 import { findOverstep, findRetelling, type Overstep } from './detector.ts'
 import { askReferee, isRefereeRunning, type RefereeInput, type RefereeResult } from './referee.ts'
+import { gameStateText } from '../state/gameState.ts'
 import { addedText, turnContext, withRules } from './rules.ts'
 import { isComplete, isSceneMarker, sliceChunks, splitSentences, type Sentence } from './text.ts'
 
@@ -62,8 +63,11 @@ export function registerTurnGuard(): void {
   api.v1.hooks.register('onBeforeContextBuild', async ({ continuityId, model, dryRun }) => {
     const settings = await settingsFor(continuityId, dryRun)
     if (!settings) return
-    // Make room for what the guard adds, so it can't push the context over its limit.
-    return { contextLimitReduction: await addedTokenCount(model, settings.strict) }
+    // Make room for what the guard adds, so it can't push the context over its limit. The game state
+    // changes from turn to turn, so it is estimated generously rather than counted.
+    const state = await gameStateText()
+    const stateTokens = state ? Math.ceil(state.length / 3) + 4 : 0
+    return { contextLimitReduction: (await addedTokenCount(model, settings.strict)) + stateTokens }
   })
 
   api.v1.hooks.register('onContextBuilt', async ({ continuityId, dryRun, messages }) => {
@@ -71,7 +75,7 @@ export function registerTurnGuard(): void {
     if (!settings) return
     const turn = turns.get(continuityId)
     if (turn && !dryRun) Object.assign(turn, turnContext(messages))
-    return { messages: withRules(messages, settings.strict) }
+    return { messages: withRules(messages, settings.strict, await gameStateText()) }
   })
 
   api.v1.hooks.register('onResponse', async ({ continuityId, text, final }) => {

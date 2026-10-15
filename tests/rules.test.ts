@@ -28,6 +28,11 @@ describe('withRules', () => {
     assert.deepEqual(withRules([{ role: 'assistant', content: 'A' }], false)[0].role, 'system')
   })
 
+  it('puts the game state between the action and the rules', () => {
+    const result = withRules(CONTEXT, false, 'Game state:\n- Money: 3 gold.')
+    assert.equal(result[3].content, `The player's action:\nYou approach the dragon.\nYou touch the dragon.\n\nGame state:\n- Money: 3 gold.\n\n${narratorRules(false)}`)
+  })
+
   it('puts the rules after the latest user message when there is no input', () => {
     const result = withRules(CONTEXT.slice(0, 3), true)
     assert.equal(result[1].content, `${CONTEXT[1].content}\n\n${narratorRules(true)}`)

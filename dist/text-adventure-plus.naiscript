@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792079808316
-version: 0.2.6
+updatedAt: 1792081759122
+version: 0.3.0
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -56,29 +56,29 @@ memoryLimit: 8
     "sgt",
     "col"
   ]);
-  function findSentenceEnd(text) {
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
+  function findSentenceEnd(text2) {
+    for (let i = 0; i < text2.length; i++) {
+      const ch = text2[i];
       if (ch === "\n") {
-        if (text.slice(0, i).trim() !== "") return i;
+        if (text2.slice(0, i).trim() !== "") return i;
         continue;
       }
       if (!TERMINATORS.includes(ch)) continue;
       let end = i + 1;
-      while (end < text.length && TERMINATORS.includes(text[end])) end++;
-      while (end < text.length && CLOSERS.includes(text[end])) end++;
-      if (end >= text.length) return -1;
-      if (!isSpace(text[end]) || ch === "." && isAbbreviation(text, i)) {
+      while (end < text2.length && TERMINATORS.includes(text2[end])) end++;
+      while (end < text2.length && CLOSERS.includes(text2[end])) end++;
+      if (end >= text2.length) return -1;
+      if (!isSpace(text2[end]) || ch === "." && isAbbreviation(text2, i)) {
         i = end - 1;
         continue;
       }
       let next = end;
-      while (next < text.length && isSpace(text[next])) {
-        if (text[next] === "\n") return end;
+      while (next < text2.length && isSpace(text2[next])) {
+        if (text2[next] === "\n") return end;
         next++;
       }
-      if (next >= text.length) return -1;
-      if (/\p{Ll}/u.test(text[next])) {
+      if (next >= text2.length) return -1;
+      if (/\p{Ll}/u.test(text2[next])) {
         i = next - 1;
         continue;
       }
@@ -86,13 +86,13 @@ memoryLimit: 8
     }
     return -1;
   }
-  function splitSentences(text) {
+  function splitSentences(text2) {
     const sentences = [];
     let start = 0;
-    while (start < text.length && text.slice(start).trim() !== "") {
-      const end = findSentenceEnd(text.slice(start));
-      const stop = end < 0 ? text.length : start + end;
-      sentences.push({ start, end: stop, text: text.slice(start, stop) });
+    while (start < text2.length && text2.slice(start).trim() !== "") {
+      const end = findSentenceEnd(text2.slice(start));
+      const stop = end < 0 ? text2.length : start + end;
+      sentences.push({ start, end: stop, text: text2.slice(start, stop) });
       start = stop;
     }
     return sentences;
@@ -100,11 +100,11 @@ memoryLimit: 8
   function isComplete(sentence) {
     return /(?:[.!?…]|[—–-]["”’])["'”’)\]*_]*\s*$/.test(sentence);
   }
-  function quoteMask(text) {
+  function quoteMask(text2) {
     const mask = [];
     let inside = false;
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
+    for (let i = 0; i < text2.length; i++) {
+      const ch = text2[i];
       if (ch === "\n") inside = false;
       if (ch === "“" || ch === '"' && !inside) {
         mask.push(true);
@@ -134,8 +134,8 @@ memoryLimit: 8
   function isSpace(ch) {
     return ch === " " || ch === "\n" || ch === "	" || ch === "\r";
   }
-  function isAbbreviation(text, dotIndex) {
-    const word = /([A-Za-z]+)$/.exec(text.slice(Math.max(0, dotIndex - 12), dotIndex))?.[1];
+  function isAbbreviation(text2, dotIndex) {
+    const word = /([A-Za-z]+)$/.exec(text2.slice(Math.max(0, dotIndex - 12), dotIndex))?.[1];
     if (!word) return false;
     if (word.length === 1) return word !== "I" && word === word.toUpperCase();
     return ABBREVIATIONS.has(word.toLowerCase());
@@ -179,27 +179,27 @@ memoryLimit: 8
       " "
     )
   );
-  function findOverstep(text, sentences, options) {
-    const mask = quoteMask(text);
+  function findOverstep(text2, sentences, options) {
+    const mask = quoteMask(text2);
     const typed = new Set(words(options.playerInput ?? "").map(stem));
     for (let index = 0; index < sentences.length; index++) {
       const sentence = sentences[index];
-      const reason = checkSentence(sentence.text.trim(), narrationOf(text, mask, sentence).trim(), typed, options);
+      const reason = checkSentence(sentence.text.trim(), narrationOf(text2, mask, sentence).trim(), typed, options);
       if (reason) return { index, reason };
     }
     return void 0;
   }
   var RETELLING_WINDOW = 4;
-  function findRetelling(text, sentences, playerInput) {
+  function findRetelling(text2, sentences, playerInput) {
     const lines = typedLines(playerInput);
     if (lines.length === 0) return 0;
-    const mask = quoteMask(text);
+    const mask = quoteMask(text2);
     let end = 0;
     for (let i = 0; i < Math.min(sentences.length, RETELLING_WINDOW); i++) {
       const squashed = squash(sentences[i].text);
       if (!lines.some((line) => squashed.includes(line))) continue;
-      const own = narrationOf(text, mask, sentences[i]).trim();
-      const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]).trim() : "";
+      const own = narrationOf(text2, mask, sentences[i]).trim();
+      const before = i > 0 ? narrationOf(text2, mask, sentences[i - 1]).trim() : "";
       const standalone = own === "" && /^["“][^"”]*["”]$/.test(sentences[i].text.trim());
       if (SPEECH.test(own) || standalone && (i === 0 || YOU_AS_SUBJECT.test(before))) end = i + 1;
     }
@@ -210,12 +210,12 @@ memoryLimit: 8
     const quotes = [...(input ?? "").matchAll(/["“]([^"”]+)["”]/g)].map((m) => m[1]);
     return quotes.flatMap((quote2) => splitSentences(quote2).map((s) => squash(s.text))).filter((line) => line.length >= 4);
   }
-  function squash(text) {
-    return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  function squash(text2) {
+    return text2.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
   }
-  function narrationOf(text, mask, sentence) {
+  function narrationOf(text2, mask, sentence) {
     let narration = "";
-    for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? " " : text[i];
+    for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? " " : text2[i];
     return narration;
   }
   function checkSentence(raw, narration, typed, options) {
@@ -237,8 +237,8 @@ memoryLimit: 8
     }
     return void 0;
   }
-  function words(text) {
-    return text.toLowerCase().match(/[a-z'’]+/g) ?? [];
+  function words(text2) {
+    return text2.toLowerCase().match(/[a-z'’]+/g) ?? [];
   }
   function stem(word) {
     const w = word.toLowerCase();
@@ -298,13 +298,13 @@ memoryLimit: 8
       { role: "user", content: user }
     ];
   }
-  function parseRefereeAnswer(raw, count) {
-    const text = raw.trim().toLowerCase();
-    if (/^(?:none|no\b)/.test(text)) return { retold: 0, flagged: 0 };
-    const numbers = (text.match(/\d+/g) ?? []).map(Number);
+  function parseRefereeAnswer(raw, count2) {
+    const text2 = raw.trim().toLowerCase();
+    if (/^(?:none|no\b)/.test(text2)) return { retold: 0, flagged: 0 };
+    const numbers = (text2.match(/\d+/g) ?? []).map(Number);
     if (numbers.length === 0) return void 0;
     const [retold, flagged] = numbers.length === 1 ? [0, numbers[0]] : numbers;
-    if (retold > count || flagged > count) return void 0;
+    if (retold > count2 || flagged > count2) return void 0;
     return { retold, flagged: flagged > retold ? flagged : 0 };
   }
   function attempts(storyModel) {
@@ -395,6 +395,113 @@ memoryLimit: 8
     return String(error);
   }
 
+  // src/state/inventory.ts
+  var INV = {
+    share: "tap.inv.share",
+    currency: "tap.inv.currency",
+    amount: "tap.inv.amount",
+    prices: "tap.inv.prices",
+    /** The item ids, in the order shown. */
+    items: "tap.inv.items",
+    /** What the AI sees, for the tab's preview. */
+    preview: "tap.inv.preview",
+    item: (id, field) => `tap.inv.item.${id}.${field}`
+  };
+  var DEFAULT_PRICES = [
+    "bread or a mug of ale: 1",
+    "a hot meal: 2",
+    "a night at an inn: 5",
+    "a rug or simple tools: 30",
+    "a sword: 50",
+    "a horse: 300"
+  ].join("\n");
+  var ITEM_FIELDS = ["name", "quantity", "equipped", "note"];
+  async function initInventory() {
+    const s = api.v1.storyStorage;
+    await s.setIfAbsent(INV.share, true);
+    await s.setIfAbsent(INV.currency, "gold");
+    await s.setIfAbsent(INV.amount, 0);
+    await s.setIfAbsent(INV.prices, DEFAULT_PRICES);
+    await s.setIfAbsent(INV.items, []);
+  }
+  async function readInventory() {
+    const s = api.v1.storyStorage;
+    const items = await Promise.all(
+      (await itemIds()).map(async (id) => ({
+        id,
+        name: text(await s.get(INV.item(id, "name"))),
+        quantity: count(await s.get(INV.item(id, "quantity")), 1),
+        equipped: await s.get(INV.item(id, "equipped")) === true,
+        note: text(await s.get(INV.item(id, "note")))
+      }))
+    );
+    return {
+      share: await s.get(INV.share) !== false,
+      currency: text(await s.get(INV.currency)).trim() || "gold",
+      amount: count(await s.get(INV.amount), 0),
+      prices: text(await s.get(INV.prices)),
+      items
+    };
+  }
+  async function addItem() {
+    const id = api.v1.uuid();
+    const s = api.v1.storyStorage;
+    await s.set(INV.item(id, "name"), "");
+    await s.set(INV.item(id, "quantity"), 1);
+    await s.set(INV.item(id, "equipped"), false);
+    await s.set(INV.item(id, "note"), "");
+    await s.set(INV.items, [...await itemIds(), id]);
+    return id;
+  }
+  async function removeItem(id) {
+    const s = api.v1.storyStorage;
+    await s.set(INV.items, (await itemIds()).filter((other) => other !== id));
+    for (const field of ITEM_FIELDS) await s.remove(INV.item(id, field));
+  }
+  async function adjustCount(key, delta, fallback = 0) {
+    const s = api.v1.storyStorage;
+    await s.set(key, Math.max(0, count(await s.get(key), fallback) + delta));
+  }
+  function inventoryLines(inv) {
+    const items = inv.items.filter((item) => item.name.trim() !== "" && item.quantity > 0);
+    if (!inv.share || inv.amount === 0 && items.length === 0) return [];
+    const lines = [`Money: ${inv.amount} ${inv.currency}.`];
+    const prices = priceList(inv.prices);
+    if (prices) lines.push(`Typical prices in ${inv.currency}: ${prices}. Keep every price in the story in line with these.`);
+    const named = (item) => item.quantity > 1 ? `${item.name.trim()} ×${item.quantity}` : item.name.trim();
+    const equipped = items.filter((item) => item.equipped);
+    const carried = items.filter((item) => !item.equipped);
+    if (equipped.length > 0) {
+      lines.push(`Equipped: ${equipped.map((item) => item.note.trim() ? `${named(item)} (${item.note.trim()})` : named(item)).join(", ")}.`);
+    }
+    lines.push(carried.length > 0 ? `Carrying: ${carried.map(named).join(", ")}.` : `Carrying: nothing${equipped.length ? " else" : ""}.`);
+    return lines;
+  }
+  function priceList(guide) {
+    return guide.split("\n").map((line) => line.trim().replace(/\s*[:=–—-]\s*(?=[\d.,]+\s*\S*$)/, " ")).filter((line) => line !== "").join(", ");
+  }
+  async function itemIds() {
+    const ids = await api.v1.storyStorage.get(INV.items);
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  }
+  function text(value) {
+    return typeof value === "string" ? value : value == null ? "" : String(value);
+  }
+  function count(value, fallback) {
+    if (value === "" || value == null) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback;
+  }
+
+  // src/state/gameState.ts
+  function gameStateBlock(lines) {
+    if (lines.length === 0) return void 0;
+    return ["Game state (keep the story consistent with it):", ...lines.map((line) => `- ${line}`)].join("\n");
+  }
+  async function gameStateText() {
+    return gameStateBlock(inventoryLines(await readInventory()));
+  }
+
   // src/guard/rules.ts
   var GAME_FRAMING = `This is an interactive text adventure. The user plays the character called "you", and each of their messages is that character's next action or line. Reply with only the world's response to it: never write for the player character.`;
   function narratorRules(strict) {
@@ -418,12 +525,14 @@ The player's action:
 
 ${narratorRules(strict)}`;
   }
-  function withRules(messages, strict) {
+  function withRules(messages, strict, gameState) {
     const result = messages.map((m) => ({ ...m }));
     const system = result.findIndex((m) => m.role === "system");
     if (system >= 0) result[system].content = joinParts(result[system].content, GAME_FRAMING);
     else result.unshift({ role: "system", content: GAME_FRAMING });
-    const rules = narratorRules(strict);
+    const rules = gameState ? `${gameState}
+
+${narratorRules(strict)}` : narratorRules(strict);
     const input = playerInputIndex(result);
     if (input >= 0) {
       result[input].content = `The player's action:
@@ -482,20 +591,22 @@ ${second}` : second;
     api.v1.hooks.register("onBeforeContextBuild", async ({ continuityId, model, dryRun }) => {
       const settings = await settingsFor(continuityId, dryRun);
       if (!settings) return;
-      return { contextLimitReduction: await addedTokenCount(model, settings.strict) };
+      const state = await gameStateText();
+      const stateTokens = state ? Math.ceil(state.length / 3) + 4 : 0;
+      return { contextLimitReduction: await addedTokenCount(model, settings.strict) + stateTokens };
     });
     api.v1.hooks.register("onContextBuilt", async ({ continuityId, dryRun, messages }) => {
       const settings = await settingsFor(continuityId, dryRun);
       if (!settings) return;
       const turn = turns.get(continuityId);
       if (turn && !dryRun) Object.assign(turn, turnContext(messages));
-      return { messages: withRules(messages, settings.strict) };
+      return { messages: withRules(messages, settings.strict, await gameStateText()) };
     });
-    api.v1.hooks.register("onResponse", async ({ continuityId, text, final }) => {
+    api.v1.hooks.register("onResponse", async ({ continuityId, text: text2, final }) => {
       const turn = turns.get(continuityId);
       if (!turn) return;
       if (!final) return { seenData: 0 };
-      const decision = await decide(turn, text.join(""));
+      const decision = await decide(turn, text2.join(""));
       if (keptNothing(decision)) {
         if (retriesInARow < MAX_AUTO_RETRIES) turn.retryNumber = retriesInARow + 1;
       } else {
@@ -503,7 +614,7 @@ ${second}` : second;
       }
       report(turn, decision).catch(logError);
       if (decision.keepFrom === 0 && decision.keep === decision.reply.length) return;
-      return { text: sliceChunks(text, decision.keepFrom, decision.keep) };
+      return { text: sliceChunks(text2, decision.keepFrom, decision.keep) };
     });
     api.v1.hooks.register("onGenerationEnd", ({ continuityId }) => {
       const turn = turns.get(continuityId);
@@ -648,9 +759,9 @@ ${second}` : second;
     const settings = await api.v1.generationParameters.get().catch(() => void 0);
     const result = await askReferee(settings?.model ?? "glm-4-6", REFEREE_SAMPLE);
     const where = `${result.model}, ${(result.ms / 1e3).toFixed(1)} s`;
-    const text = result.error ? `Referee test failed: ${result.error}` : result.answer === 2 ? `Referee test passed: it found the right sentence (${where}).` : `Referee test: it works, but answered ${result.answer} where 2 was right (${where}).`;
-    await api.v1.storyStorage.set(KEYS.refereeTest, sanitize(text));
-    return text;
+    const text2 = result.error ? `Referee test failed: ${result.error}` : result.answer === 2 ? `Referee test passed: it found the right sentence (${where}).` : `Referee test: it works, but answered ${result.answer} where 2 was right (${where}).`;
+    await api.v1.storyStorage.set(KEYS.refereeTest, sanitize(text2));
+    return text2;
   }
   async function isEnabled() {
     return await api.v1.storyStorage.get(KEYS.enabled) === true;
@@ -669,28 +780,176 @@ ${second}` : second;
   }
   async function addedTokenCount(model, strict) {
     const key = `${model}|${strict}`;
-    let count = addedTokens.get(key);
-    if (count === void 0) {
-      const text = addedText(strict);
-      count = await api.v1.tokenizer.encode(text, model).then((tokens) => tokens.length).catch(() => Math.ceil(text.length / 3));
-      addedTokens.set(key, count);
+    let count2 = addedTokens.get(key);
+    if (count2 === void 0) {
+      const text2 = addedText(strict);
+      count2 = await api.v1.tokenizer.encode(text2, model).then((tokens) => tokens.length).catch(() => Math.ceil(text2.length / 3));
+      addedTokens.set(key, count2);
     }
-    return count + 8;
+    return count2 + 8;
   }
-  function quote(text, max) {
-    return JSON.stringify(text.length > max ? text.slice(0, max) + "…" : text);
+  function quote(text2, max) {
+    return JSON.stringify(text2.length > max ? text2.slice(0, max) + "…" : text2);
   }
-  function sanitize(text) {
-    return text.replace(/\{\{/g, "{ {");
+  function sanitize(text2) {
+    return text2.replace(/\{\{/g, "{ {");
+  }
+
+  // src/ui/inventoryPanel.ts
+  var MUTED = { opacity: 0.7, fontSize: "0.85em" };
+  var previewPending = false;
+  async function inventoryPanel(rebuild) {
+    const inv = await readInventory();
+    updatePreview(inv).catch(logError);
+    const edited = () => schedulePreview();
+    return {
+      type: "scriptPanel",
+      id: IDS.inventoryPanel,
+      name: "Inventory",
+      iconId: "package",
+      content: [
+        {
+          type: "checkboxInput",
+          label: "Tell the AI about my inventory",
+          storageKey: `story:${INV.share}`,
+          onChange: edited
+        },
+        moneySection(edited),
+        itemsSection(inv, rebuild, edited),
+        {
+          type: "collapsibleSection",
+          title: "What the AI sees",
+          iconId: "eye",
+          initialCollapsed: true,
+          content: [{ type: "text", text: `{{story:${INV.preview}}}`, style: { whiteSpace: "pre-wrap", fontSize: "0.9em" } }]
+        }
+      ]
+    };
+  }
+  function moneySection(edited) {
+    return {
+      type: "box",
+      content: [
+        { type: "text", markdown: true, text: "**Money**" },
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "numberInput", label: "Amount", storageKey: `story:${INV.amount}`, onChange: edited, style: { width: "7em" } },
+            stepButton("−", INV.amount, -1, edited),
+            stepButton("+", INV.amount, 1, edited),
+            {
+              type: "textInput",
+              label: "Currency",
+              placeholder: "gold",
+              storageKey: `story:${INV.currency}`,
+              onChange: edited,
+              style: { width: "12em" }
+            }
+          ]
+        },
+        {
+          type: "collapsibleSection",
+          title: "Price guide",
+          iconId: "tag",
+          initialCollapsed: true,
+          content: [
+            {
+              type: "text",
+              text: 'Typical prices in your currency, one per line, like "a hot meal: 2". The AI is told to keep every price in the story in line with these, so it knows what your money is worth.',
+              style: MUTED
+            },
+            { type: "multilineTextInput", storageKey: `story:${INV.prices}`, onChange: edited }
+          ]
+        }
+      ]
+    };
+  }
+  function itemsSection(inv, rebuild, edited) {
+    return {
+      type: "box",
+      content: [
+        { type: "text", markdown: true, text: "**Items**" },
+        ...inv.items.length > 0 ? inv.items.map((item) => itemPart(item, rebuild, edited)) : [{ type: "text", text: "Nothing yet.", style: MUTED }],
+        {
+          type: "button",
+          text: "Add item",
+          iconId: "plus",
+          disabledWhileCallbackRunning: true,
+          callback: () => addItem().then(rebuild).catch(logError)
+        }
+      ]
+    };
+  }
+  function itemPart(item, rebuild, edited) {
+    const key = (field) => `story:${INV.item(item.id, field)}`;
+    return {
+      type: "column",
+      id: `tap-item-${item.id}`,
+      style: { gap: "4px", paddingBottom: "8px" },
+      content: [
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Item", placeholder: "Item name", storageKey: key("name"), onChange: edited, style: { flex: "1 1 10em" } },
+            { type: "numberInput", label: "Qty", storageKey: key("quantity"), onChange: edited, style: { width: "5em" } },
+            stepButton("−", INV.item(item.id, "quantity"), -1, edited, 1),
+            stepButton("+", INV.item(item.id, "quantity"), 1, edited, 1),
+            { type: "checkboxInput", label: "Equipped", storageKey: key("equipped"), onChange: edited },
+            {
+              type: "button",
+              text: "Remove",
+              iconId: "trash-2",
+              callback: () => removeItem(item.id).then(rebuild).catch(logError)
+            }
+          ]
+        },
+        {
+          type: "textInput",
+          placeholder: 'Note for the AI while equipped (optional), e.g. "notched blade"',
+          storageKey: key("note"),
+          onChange: edited
+        }
+      ]
+    };
+  }
+  function stepButton(text2, key, delta, edited, fallback = 0) {
+    return {
+      type: "button",
+      text: text2,
+      callback: () => adjustCount(key, delta, fallback).then(edited).catch(logError)
+    };
+  }
+  function schedulePreview() {
+    if (previewPending) return;
+    previewPending = true;
+    api.v1.timers.setTimeout(() => {
+      previewPending = false;
+      updatePreview().catch(logError);
+    }, 300).catch(logError);
+  }
+  async function updatePreview(inv) {
+    const current = inv ?? await readInventory();
+    const block = gameStateBlock(inventoryLines(current));
+    const text2 = !current.share ? "Nothing: sending the inventory is turned off above." : block ?? "Nothing yet. Add money or an item, and it will be sent with every turn.";
+    await api.v1.storyStorage.set(INV.preview, text2.replace(/\{\{/g, "{ {"));
   }
 
   // src/ui/storyPanels.ts
   var visible = false;
   async function setStoryPanelsVisible(show) {
     if (show === visible) return;
-    if (show) await api.v1.ui.update([partyPanel(), inventoryPanel()]);
+    if (show) await api.v1.ui.update([partyPanel(), await inventoryPanel(rebuildInventory)]);
     else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel]);
     visible = show;
+  }
+  async function rebuildInventory() {
+    if (visible) await api.v1.ui.update([await inventoryPanel(rebuildInventory)]);
   }
   function partyPanel() {
     return {
@@ -705,31 +964,7 @@ ${second}` : second;
           text: [
             "**Party** (coming in Phase 3)",
             "",
-            "Your companions will be listed here with their role, status (healthy, wounded…), attitude toward you and notes. Members marked *in party* are added to the AI's context every turn, like this:",
-            "",
-            "`[ Party: Lyra (elf ranger; wounded; trusts you) ]`"
-          ].join("\n")
-        }
-      ]
-    };
-  }
-  function inventoryPanel() {
-    return {
-      type: "scriptPanel",
-      id: IDS.inventoryPanel,
-      name: "Inventory",
-      iconId: "package",
-      content: [
-        {
-          type: "text",
-          markdown: true,
-          text: [
-            "**Inventory** (coming in Phase 2)",
-            "",
-            "Your currency, items with quantities, and what you have equipped will be tracked here and added to the AI's context every turn, like this:",
-            "",
-            "`[ Equipped: iron sword ]`  ",
-            "`[ Carrying: healing potion ×3, rope; 45 gold ]`"
+            "Your companions will be listed here with their role, status (healthy, wounded…), attitude toward you and notes. Members marked *in party* are added to the AI's context every turn."
           ].join("\n")
         }
       ]
@@ -846,6 +1081,7 @@ ${second}` : second;
     await api.v1.storyStorage.setIfAbsent(KEYS.lastTurnStatus, "No turn checked yet.");
     await api.v1.storyStorage.setIfAbsent(KEYS.refereeTest, "Not run yet.");
     for (const key of OLD_STORY_KEYS) await api.v1.storyStorage.remove(key);
+    await initInventory();
     await registerSettingsPanel();
     const enabled = await api.v1.storyStorage.get(KEYS.enabled) === true;
     await setStoryPanelsVisible(enabled);

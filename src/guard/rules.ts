@@ -31,16 +31,16 @@ export function addedText(strict: boolean): string {
 
 /**
  * Returns a copy of the context with the game framing added to the system prompt, and the player's
- * latest input marked as their action and followed by the rules. If there is no input this turn
- * (the story just continues), the rules go after the latest user message instead.
+ * latest input marked as their action and followed by the game state (if any) and the rules. If
+ * there is no input this turn (the story just continues), they go after the latest user message.
  */
-export function withRules(messages: Message[], strict: boolean): Message[] {
+export function withRules(messages: Message[], strict: boolean, gameState?: string): Message[] {
   const result = messages.map((m) => ({ ...m }))
   const system = result.findIndex((m) => m.role === 'system')
   if (system >= 0) result[system].content = joinParts(result[system].content, GAME_FRAMING)
   else result.unshift({ role: 'system', content: GAME_FRAMING })
 
-  const rules = narratorRules(strict)
+  const rules = gameState ? `${gameState}\n\n${narratorRules(strict)}` : narratorRules(strict)
   const input = playerInputIndex(result)
   if (input >= 0) {
     result[input].content = `The player's action:\n${result[input].content ?? ''}\n\n${rules}`

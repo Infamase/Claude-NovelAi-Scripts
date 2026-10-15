@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 1 (v0.2.6)**: the turn guard, tuning from playtests.
+Status: **Phase 2 built (v0.3.0)**: the Inventory tab. Waiting on playtesting.
 
 ---
 
@@ -23,6 +23,7 @@ Status: **Phase 1 (v0.2.6)**: the turn guard, tuning from playtests.
 | How replies appear | NovelAI shows a reply all at once, so the script holds it until it has been checked. |
 | Inventory/Party updates | **Manual in v1.** You edit the tabs yourself. Auto-tracking is a later phase. |
 | v1 tracking extras | Item **quantities**, **equipped** items, a **currency** counter, and per-member party **status** and **attitude**. |
+| Currency | A **name** you type, the **amount**, and a **price guide** of typical prices, so the AI prices things consistently with what the money is worth. |
 | Companions | **Act freely.** They can speak and take actions on their own like any NPC. Only *your* character is protected. |
 | "What do you do?" prompts | **Abolished.** The AI is told never to write them, and any that slip through are cut. |
 | Name | **Text Adventure+** |
@@ -106,22 +107,25 @@ What gets injected (kept compact to save tokens):
 
 ## 6. Inventory tab (bottom bar)
 
-- A **currency** counter at the top (number field with +/− buttons; the currency name can be changed)
-- For each item: **name**, **quantity** (with +/−), an **equipped** checkbox, and a **description** (optional; injected only for equipped items, to save tokens)
-- Equipped items are listed first. Add and Remove buttons. A "What the AI sees" preview.
+- **Tell the AI about my inventory**: a switch, on by default.
+- **Money**: an amount (number field with − and + buttons), a **currency** name you type ("gold", "crowns"…), and a **price guide**: typical prices in that currency, one per line ("a hot meal: 2"). It starts with a typical fantasy scale (bread or ale 1, a hot meal 2, a night at an inn 5, a rug or simple tools 30, a sword 50, a horse 300). The AI is told to keep every price in line with it, so a shopkeeper asks about 30 for a rug, not 300.
+- **Items**: name, quantity (with − and +), an **equipped** checkbox, an optional **note** (sent only while equipped), and Remove. Plus Add item.
+- **What the AI sees**: a preview of exactly what is sent.
 
-What gets injected:
+Inputs bind straight to story storage, so edits save as you type. Items with no name or a quantity of 0 are left out. Nothing is sent until there is money or an item.
+
+What gets sent:
 ```
-[ Equipped: iron sword, leather armor ]
-[ Carrying: healing potion ×3, rope, torch ×2; 45 gold ]
+Game state (keep the story consistent with it):
+- Money: 45 crowns.
+- Typical prices in crowns: bread or a mug of ale 1, a hot meal 2, …, a horse 300. Keep every price in the story in line with these.
+- Equipped: iron sword (notched blade), leather armor.
+- Carrying: healing potion ×3, rope.
 ```
 
 ## 7. Getting state into the context
 
-- **Preferred:** add the party and inventory lines next to the narrator rules in `onContextBuilt`, close to the most recent story text. Space is reserved in advance (`contextLimitReduction` in `onBeforeContextBuild`) so the context never overflows.
-- **Fallback:** temporary always-on lorebook entries (`onBeforeContextBuild` → `temporaryLorebookEntries`). These are never saved into your real Lorebook.
-- Phase 2 decides which of the two keeps the AI more consistent.
-- Neither method touches your Memory, Author's Note or Lorebook.
+The game state goes in the player's latest message, between **the player's action** and the narration rules (`onContextBuilt`), where the AI pays the most attention. Room for it is reserved first (`contextLimitReduction` in `onBeforeContextBuild`) so the context never overflows. It doesn't touch your Memory, Author's Note or Lorebook. (Temporary lorebook entries remain a fallback if this placement ever proves unreliable.)
 
 ## 8. Settings
 
@@ -165,8 +169,8 @@ dist/text-adventure-plus.naiscript   ← the file you import
 | Phase | Deliverable | You test |
 |---|---|---|
 | **0 — Scaffold** (done) | Repo tooling, typings, build, test runner. A stub script that registers empty Party and Inventory tabs and a settings panel. Also a test of how `stopGeneration` behaves together with trimmed text in `onResponse`. | Import it and confirm the tabs show up where you expect. |
-| **1 — Turn guard** (built, v0.2.0) | Narration rules, hold-and-check with the pattern rules and the referee, and the Last turn report. | Play a few scenes and send me any turns that were cut too early or too late. |
-| **2 — Inventory** | The Inventory tab, its context injection, and the preview. | Check that the AI respects what you carry and have equipped. |
+| **1 — Turn guard** (done; tuned through v0.2.6) | Narration rules, hold-and-check with the pattern rules and the referee, and the Last turn report. | Play a few scenes and send me any turns that were cut too early or too late. |
+| **2 — Inventory** (built, v0.3.0) | The Inventory tab, its context injection, and the preview. | Check that the AI respects what you carry and have equipped. |
 | **3 — Party** | The Party tab, its context injection, and the preview. | Check that companions act in character. |
 | **4 — Polish → v1.0** | The length cap, settings, detector tuning from your feedback, a README, and the v1.0 release. | Final playtest. |
 
