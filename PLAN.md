@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 0 (v0.1.2)**. The first stop test lost the turn's text when the script stopped generation; v0.1.2 compares three cutting techniques.
+Status: **Phase 1 built (v0.2.0)**: the turn guard. Waiting on playtesting.
 
 ---
 
@@ -16,8 +16,11 @@ Status: **Phase 0 (v0.1.2)**. The first stop test lost the turn's text when the 
 
 | Topic | Decision |
 |---|---|
-| Model | **Xialong** (`xialong-v1`), as the stop test showed. Like GLM 4.6 it uses the chat endpoint, so the streaming hooks work and the script can cut generation off mid-stream. |
-| How much the AI may write about your character | Default: **reactions allowed**. Sensations and involuntary reactions are fine ("the ale burns your throat; you cough"). New speech, decisions and deliberate actions are cut. A toggle switches to **strict** (the world and NPCs only). |
+| Model | **Xialong** (`xialong-v1`), as the stop test showed. Like GLM 4.6 it uses the chat endpoint, so every hook the guard needs works. |
+| How much the AI may write about your character | Default: **reactions allowed**. Sensations and involuntary reactions are fine ("the ale burns your throat; you cough"). New speech, thoughts, decisions and deliberate actions are cut. A toggle switches to **strict** (no physical reactions either). |
+| Your character's thoughts | **Cut, all of them.** |
+| Checking replies | **Pattern rules plus a referee**, a quick second AI call. The referee is a setting, on by default. |
+| How replies appear | NovelAI shows a reply all at once, so the script holds it until it has been checked. |
 | Inventory/Party updates | **Manual in v1.** You edit the tabs yourself. Auto-tracking is a later phase. |
 | v1 tracking extras | Item **quantities**, **equipped** items, a **currency** counter, and per-member party **status** and **attitude**. |
 | Companions | **Act freely.** They can speak and take actions on their own like any NPC. Only *your* character is protected. |
@@ -35,41 +38,43 @@ Status: **Phase 0 (v0.1.2)**. The first stop test lost the turn's text when the 
 
 ## 4. How "stop at your turn" works
 
-This is the core feature. A model can't be given a "dynamic length" directly, so the script uses four layers. Each layer catches what the one before it misses.
+This is the core feature. A script can't give the model a "dynamic length", and it can't stop a reply early either: Phase 0 showed that NovelAI then throws the whole reply away. So the guard lets the AI finish, checks the reply, and lets through only the part before it starts writing for your character. NovelAI shows replies all at once, so holding a reply until it is checked looks no different on screen.
 
 ### Layer 1 — Instruct (prevention)
-Before every generation the script adds a short **narrator rules** message to the context (`onContextBuilt`, which only runs on GLM). The rules tell the AI to:
-- narrate only the consequences of the player's latest action, including how NPCs and companions react;
-- never write the player character's dialogue, decisions or deliberate actions (in strict mode, nothing about the player character at all);
-- end the response at the first moment the player needs to decide something, and end it silently: never ask what the player does, never offer choices, never speak to the player directly.
+Before every reply the script adds short **narration rules** to the end of your latest input in the context (`onContextBuilt`). The rules tell the AI to:
+- write only what happens because of your input: how the world, the other characters and companions respond, and what your character sees and hears;
+- never write your character's speech, thoughts, conclusions, decisions or deliberate actions beyond what you typed (involuntary physical reactions are fine, except in strict mode);
+- stop as soon as your character would need to speak, act or decide, and end on the world: never ask what you do, offer choices or address you.
 
-The rules sit near the end of the context, where instructions carry the most weight. You can check the exact text in NovelAI's own Context viewer.
+Space for the rules is reserved first (`contextLimitReduction` in `onBeforeContextBuild`), so they can't push the context over its limit. They also show in NovelAI's Context viewer.
 
-### Layer 2 — Watch (live cut-off)
-The script watches the streamed text (`onResponse`):
-- Text reaches the editor **one complete sentence at a time**. The unfinished sentence is held back (`seenData`), so an overstepping sentence never appears, even briefly.
-- Each complete sentence goes through the **overstep detector** (below).
-- When the detector fires, the script keeps everything before that sentence, drops the rest, and **stops generation** (`stopGeneration`).
+### Layer 2 — Check (pattern rules, then the referee)
+The script holds every streamed chunk back (`seenData: 0`) and decides on the final `onResponse` call, while it can still shorten the text:
+1. **Pattern rules** check each sentence's narration. They never look inside quotes, so an NPC may still ask "Will you help me?".
+2. **The referee** (a setting, on by default) is a tiny second AI call. It sees the story just before your turn, what you typed, and the numbered sentences before any rule cut. It answers with the number of the first sentence that writes for your character, or 0. It catches what patterns can't, such as an unattributed line of your speech or an unmarked thought.
+3. The reply is cut before the earliest flagged sentence.
 
-**Overstep detector** (heuristic and tunable; this is pure code with unit tests):
-
-| Signal | Example | Result |
+| Signal | Example | Caught by |
 |---|---|---|
-| A new action marker | a line starting with `>` | cut |
-| Player speech | `You say, "…"`, `"…," you reply` | cut |
-| Player decision or deliberate action | `You decide to…`, `You draw your sword and…` | cut |
-| Player sensation or involuntary reaction | `You feel warm.`, `You cough.` | allowed in *reactions* mode, cut in *strict* |
-| End-of-turn prompt, in any form | `What do you do?`, `What's your next move?`, `The choice is yours.`, `Will you fight or flee?` | always cut, then stop |
+| A new action marker | a line starting with `>` | rules |
+| Your character speaking | `"…," you say`, `You ask her name.` | rules |
+| Your character's thoughts or decisions | `You wonder if…`, `You realize…`, `You decide to…` | rules |
+| End-of-turn prompts, in any form | `What do you do?`, `The choice is yours.`, `Will you fight or flee?` | rules |
+| Unattributed speech, unmarked thoughts | `"First... guest?"`, `Her? The dragon is... a woman?` | referee |
+| Deliberate actions you didn't type | `You nod and slide your mug over.` | referee (the rules, when it's off or unavailable) |
+| Physical reactions | `You cough.`, `You flinch.` | allowed; cut in strict mode |
 
-Reactions mode works from a list of allowed verbs (feel, notice, hear, see, smell, taste, cough, wince, shiver, flinch…). Any other "You + verb" sentence counts as an action.
+Carrying out what you typed is allowed: after "You approach the dragon", the line "As you approach, she lifts her head" stays.
 
-### Layer 3 — Cap (safety net)
-A per-turn **maximum length** stops long rambles that never trip the detector. It is set right before generation and restored afterwards (`onGenerationRequested` → `generationParameters.update` → `onGenerationEnd`). The size depends on the input: a short cap for speech and simple actions, a longer one for travel, waiting or time skips. This layer has an on/off setting.
+If the very first sentence oversteps, nothing is added and a notification asks you to press Retry.
 
-### Layer 4 — Clean (tidy-up)
-After generation ends (`onGenerationEnd`), the script removes a trailing half-sentence if the length cap cut one off, and fixes leftover whitespace.
+### Layer 3 — Cap (Phase 4)
+Because a reply can't be stopped early, the AI keeps writing (out of sight) after an overstep until it finishes. A per-turn **maximum length** keeps that wait short.
 
-**Transparency:** a small status line ("Stopped: player speech detected — *'You say…'*") shows *why* each turn ended. If a cut came too early, press Send to continue, and tell me about it so I can tune the detector.
+### Layer 4 — Clean
+If the length limit cut the reply off mid-sentence, the unfinished last sentence is removed.
+
+**Transparency:** the sidebar's **Last turn** section says what was kept, where the cut was and why. **Copy details** copies the whole reply, sentence by sentence, with the cut marked. Send those for turns that were cut wrongly.
 
 ---
 
@@ -107,16 +112,17 @@ What gets injected:
 
 - **Preferred:** add the party and inventory lines next to the narrator rules in `onContextBuilt`, close to the most recent story text. Space is reserved in advance (`contextLimitReduction` in `onBeforeContextBuild`) so the context never overflows.
 - **Fallback:** temporary always-on lorebook entries (`onBeforeContextBuild` → `temporaryLorebookEntries`). These are never saved into your real Lorebook.
-- The Phase 1 test decides which of the two keeps GLM more consistent.
+- Phase 2 decides which of the two keeps the AI more consistent.
 - Neither method touches your Memory, Author's Note or Lorebook.
 
 ## 8. Settings
 
 Settings live in a **right-sidebar panel**, which keeps the bottom bar for Party and Inventory:
 - Enable for this story
-- Player-character rule: Reactions / Strict
-- Length cap: on/off, plus short and long sizes
-- Debug log, to help with tuning
+- Referee: on/off
+- Strict: on/off
+- Last turn: what was kept and why, plus **Copy details**
+- Length cap: on/off, plus short and long sizes (Phase 4)
 
 ---
 
@@ -125,53 +131,57 @@ Settings live in a **right-sidebar panel**, which keeps the bottom bar for Party
 ```
 src/
   main.ts                  entry: registers hooks and UI
-  guard/detector.ts        pure functions: sentence splitting, overstep detection
-  guard/hooks.ts           onTextAdventureInput / onResponse / onGenerationEnd wiring
-  state/party.ts           data model + storage
-  state/inventory.ts
-  context/inject.ts        formats state + narrator rules, context hooks
-  ui/partyPanel.ts
-  ui/inventoryPanel.ts
-  ui/settingsPanel.ts
+  keys.ts                  storage keys and UI ids
+  guard/text.ts            sentence splitting, quote tracking, chunk helpers
+  guard/detector.ts        the pattern rules
+  guard/rules.ts           the narration rules, and where they go in the context
+  guard/referee.ts         the referee's prompt, answer parsing and call
+  guard/turnGuard.ts       hook wiring: hold, check, cut, report
+  ui/settingsPanel.ts      the sidebar panel
+  ui/storyPanels.ts        Party and Inventory tabs (placeholders until Phases 2–3)
+  state/…                  Party and Inventory data (Phases 2–3)
 types/script-types.d.ts    NovelAI's official API typings
 scripts/build.mjs          bundles src/ into one file + adds the .naiscript header
-tests/detector.test.ts     real GLM outputs → expected cut points
+tests/                     unit tests; helpers/mockApi.ts is a stand-in for NovelAI's API
 dist/text-adventure-plus.naiscript   ← the file you import
 ```
 
 - **TypeScript**, type-checked against NovelAI's official typings.
 - **esbuild** bundles the modules into a single script, and the build writes the `.naiscript` header (name, version, author, description).
-- **Unit tests** cover the detector, using a sample collection of real overstepping outputs.
-- **Installing:** User Scripts (Alt+X) → Import → `dist/text-adventure-plus.naiscript`, as an account script. It asks once for the `storyEdit` permission, which the length cap needs.
+- **Unit tests** cover the pattern rules (with real replies from playtesting), the referee prompt, and whole turns run against the stand-in API.
+- **Installing:** User Scripts (Alt+X) → Import → `dist/text-adventure-plus.naiscript`, as an account script. It asks for clipboard access the first time you press Copy details. The length cap (Phase 4) will need the `storyEdit` permission.
 
 ## 10. Milestones
 
 | Phase | Deliverable | You test |
 |---|---|---|
-| **0 — Scaffold** | Repo tooling, typings, build, test runner. A stub script that registers empty Party and Inventory tabs and a settings panel. Also a test of how `stopGeneration` behaves together with trimmed text in `onResponse`. | Import it and confirm the tabs show up where you expect. |
-| **1 — Turn guard** | Narrator rules, the live cut-off, the detector with tests, and the "why it stopped" status line. | Play a few scenes and send me any turns that were cut too early or too late. |
+| **0 — Scaffold** (done) | Repo tooling, typings, build, test runner. A stub script that registers empty Party and Inventory tabs and a settings panel. Also a test of how `stopGeneration` behaves together with trimmed text in `onResponse`. | Import it and confirm the tabs show up where you expect. |
+| **1 — Turn guard** (built, v0.2.0) | Narration rules, hold-and-check with the pattern rules and the referee, and the Last turn report. | Play a few scenes and send me any turns that were cut too early or too late. |
 | **2 — Inventory** | The Inventory tab, its context injection, and the preview. | Check that the AI respects what you carry and have equipped. |
 | **3 — Party** | The Party tab, its context injection, and the preview. | Check that companions act in character. |
 | **4 — Polish → v1.0** | The length cap, settings, detector tuning from your feedback, a README, and the v1.0 release. | Final playtest. |
 
 **Later ideas:** auto-tracking ("you pick up the key" → a suggested inventory change), linking party members to existing Lorebook entries, simple stats, and state that follows undo/redo.
 
-### Phase 0 findings so far
+### Phase 0 findings
 
 - **`api.v1.ui.register` replaces all of the script's UI.** Panels added later must go through `api.v1.ui.update`. (This caused the "UI callback failed" bug, fixed in v0.1.1.)
 - **Xialong fires every hook** the plan relies on: `onTextAdventureInput`, `onGenerationRequested`, `onContextBuilt`, `onResponse` and `onGenerationEnd`.
 - **Context layout on Xialong:** `system` (the model's prompt) → `user` (memory and tags, ending in "Write.") → `assistant` (the story so far) → `user` (your latest Do/Say input, e.g. `You ask "Speak…with?"`) → an empty `assistant` (the reply to write). Each input is its own user message, so the narrator rules can sit right next to it.
 - **Inputs are stored as their own paragraphs** marked `dialogue`/`action` with origin `user`, without the `>`.
-- **First stop test (cut and stop in one step):** none of the turn's text stayed in the editor, not even the sentence let through before the stop, and one more `onResponse` call arrived after the stop. v0.1.2 tries three techniques to find one that keeps the text.
+- **Stopping a reply loses it.** When a script stops generation, NovelAI throws the whole reply away and records no history entry, whether the stop comes with text or on a later call. Hiding the text after the cut (blanking it) without stopping works, and keeps a normal history entry.
+- **Replies reach the document only when the generation ends**, and NovelAI shows them all at once.
+- **The final `onResponse` call is empty.** It doesn't resend the reply.
 
 ## 11. Risks
 
-- **Script stops can lose text.** In the first stop test, stopping generation lost the whole turn. v0.1.2 compares three techniques. If no technique that stops generation keeps the text, the fallback is to hide everything after the cut without stopping: the model keeps generating, unseen, up to the length cap. That makes Layer 3's cap important.
-- **Detector accuracy.** A heuristic will sometimes cut too early or too late. It is tunable and covered by tests, and the status line shows exactly what it caught.
+- **Hidden extra writing.** The AI keeps writing after an overstep until it finishes, so a long overstep means a longer wait. Layer 1 makes oversteps rarer, and Layer 3's cap (Phase 4) limits the wait.
+- **The referee hasn't run inside NovelAI yet.** If calling the AI from inside a reply fails, or takes over 12 seconds, the pattern rules take over and the Last turn report says why. Each check uses about 8 of the script's 2048 output tokens per 4 minutes.
+- **Accuracy.** The rules and the referee will sometimes cut too early or too late. The Last turn report shows exactly what was cut and why, and copied details become test cases.
 - **Persisted settings.** `generationParameters.update` saves into the story's settings, so the script always restores the original value, including on the next load if something went wrong mid-turn.
-- **Chat-endpoint models only** (Xialong, GLM 4.6). On models that use the older endpoint, the streaming hooks don't run. The script detects this and shows a notice rather than failing silently.
+- **Chat-endpoint models only** (Xialong, GLM 4.6). On models that use the older endpoint, these hooks don't run, so the guard does nothing there.
 - **Token cost.** The injected state takes up context space, so the format stays compact.
 
 ## 12. Open questions (answer whenever)
 
-1. **Bad examples (when you have them):** paste 3–5 real turns where the AI overstepped, with your input. These become the first test cases.
+1. **Bad turns (whenever you hit them):** press **Copy details** in the sidebar's Last turn section and paste the result. Each one becomes a test case.

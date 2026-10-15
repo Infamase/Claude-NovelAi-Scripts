@@ -3,14 +3,36 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792065685218
-version: 0.1.2
+updatedAt: 1792066759835
+version: 0.2.0
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
 ---*/
 "use strict";
 (() => {
+  // src/keys.ts
+  var KEYS = {
+    /** Story: whether the script is on for this story. */
+    enabled: "tap.enabled",
+    /** Account: strict mode (no physical reactions from the player character either). */
+    strict: "tap.strict",
+    /** Account: whether the referee double-checks replies. */
+    referee: "tap.referee",
+    /** Story: summary and full details of the last guarded turn. */
+    lastTurnStatus: "tap.lastTurn.status",
+    lastTurnDetails: "tap.lastTurn.details"
+  };
+  var OLD_STORY_KEYS = ["tap.diag.armed", "tap.diag.report", "tap.diag.step", "tap.diag.turns", "tap.diag.lastRun"];
+  var IDS = {
+    settingsPanel: "tap-settings",
+    partyPanel: "tap-party",
+    inventoryPanel: "tap-inventory"
+  };
+  function logError(error) {
+    api.v1.error("Text Adventure+:", error);
+  }
+
   // src/guard/text.ts
   var TERMINATORS = ".!?…";
   var CLOSERS = `"'”’)]*_`;
@@ -62,14 +84,37 @@ memoryLimit: 8
     }
     return -1;
   }
-  function chunksCovering(chunks, length) {
-    let total = 0;
-    let count = 0;
-    while (count < chunks.length && total < length) {
-      total += chunks[count].length;
-      count++;
+  function splitSentences(text) {
+    const sentences = [];
+    let start = 0;
+    while (start < text.length && text.slice(start).trim() !== "") {
+      const end = findSentenceEnd(text.slice(start));
+      const stop = end < 0 ? text.length : start + end;
+      sentences.push({ start, end: stop, text: text.slice(start, stop) });
+      start = stop;
     }
-    return count;
+    return sentences;
+  }
+  function isComplete(sentence) {
+    return /(?:[.!?…]|[—–-]["”’])["'”’)\]*_]*\s*$/.test(sentence);
+  }
+  function quoteMask(text) {
+    const mask = [];
+    let inside = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "\n") inside = false;
+      if (ch === "“" || ch === '"' && !inside) {
+        mask.push(true);
+        inside = true;
+      } else if (ch === "”" || ch === '"') {
+        mask.push(true);
+        inside = false;
+      } else {
+        mask.push(inside);
+      }
+    }
+    return mask;
   }
   function truncateChunks(chunks, length) {
     let remaining = length;
@@ -89,276 +134,347 @@ memoryLimit: 8
     return ABBREVIATIONS.has(word.toLowerCase());
   }
 
-  // src/keys.ts
-  var KEYS = {
-    enabled: "tap.enabled",
-    diagArmed: "tap.diag.armed",
-    diagReport: "tap.diag.report",
-    diagStep: "tap.diag.step",
-    diagTurns: "tap.diag.turns"
-  };
-  var IDS = {
-    settingsPanel: "tap-settings",
-    partyPanel: "tap-party",
-    inventoryPanel: "tap-inventory"
-  };
-  function logError(error) {
-    api.v1.error("Text Adventure+:", error);
+  // src/guard/detector.ts
+  var PROMPTS = [
+    [/\bwhat (?:do|will|would|should|shall|can|could) you\b/i, "asks what you do"],
+    [/\b(?:do|will|would|should|shall|can|could) you\b[^.!?]*\?/i, "asks you a question"],
+    [/\b(?:the )?(?:choice|decision) is yours\b/i, "hands the turn to you"],
+    [/\bit(?:'|’)?s (?:up to you|your (?:turn|move|call|choice))\b/i, "hands the turn to you"],
+    [/\bwhat(?:'|’)?s your (?:next )?(?:move|choice|plan|decision|call)\b/i, "asks what you do"],
+    [/\bwhat (?:now|next)\s*\?/i, "asks what you do"],
+    [/\bhow (?:do|will|would|should) you (?:respond|react|reply|answer|proceed|handle)\b/i, "asks what you do"],
+    [/\byou (?:could|can|might)\b[^.!?]*\bor (?:you (?:could|can|might)|perhaps)\b/i, "offers you choices"]
+  ];
+  var ADVERB = String.raw`(?:\w+ly\s+|(?:just|still|only|never|barely|almost|nearly|already|also|even|finally|then|now|instead)\s+)*`;
+  var SPEECH = new RegExp(
+    String.raw`\byou(?:r voice)?\s+${ADVERB}(?:say|said|ask|asked|reply|replied|respond|responded|answer|answered|shout|shouted|yell|yelled|whisper|whispered|mutter|muttered|murmur|murmured|exclaim|exclaimed|stammer|stammered|blurt|blurted|tell|told|speak|spoke|repeat|repeated|insist|insisted|demand|demanded|croak|croaked|call out|called out|cry out|cried out|manage to say|managed to say)\b`,
+    "i"
+  );
+  var DECISION = new RegExp(
+    String.raw`\byou\s+${ADVERB}(?:decide|decided|choose|chose|opt|opted|resolve|resolved|elect|elected|make up your mind|made up your mind)\b`,
+    "i"
+  );
+  var THOUGHT = new RegExp(
+    String.raw`\byou\s+${ADVERB}(?:think|thought|wonder|wondered|realize|realized|realise|realised|figure|figured|suppose|supposed|guess|guessed|reckon|reckoned|conclude|concluded|consider|considered|recall|recalled|remember|remembered|hope|hoped|wish|wished|plan|planned|imagine|imagined|muse|mused|ponder|pondered|doubt|doubted|suspect|suspected|believe|believed|understand|understood|(?:feel|felt) (?:that|like you|as if you|as though you)|can(?:not|'t|’t) help but (?:think|wonder|feel))\b`,
+    "i"
+  );
+  var SUBJECT_YOU = new RegExp(
+    String.raw`(?:^|[,;:—–]\s*|\b(?:and|but|then|so|as|while|when|until|before|after|because|if|once|or)\s+)you\s+${ADVERB}([a-z'’]+)`,
+    "gi"
+  );
+  var PERCEPTION = new Set(
+    "see saw seen hear heard notice noticed spot spotted smell smelled smelt taste tasted sense sensed watch watched glimpse glimpsed find found catch caught are were am be been being have has had can could cannot can’t can't couldn’t couldn't may might must should would will shall do does did don’t don't didn’t didn't doesn’t doesn't won’t won't wouldn’t wouldn't".split(
+      " "
+    )
+  );
+  var REACTIONS = new Set(
+    "feel feels felt flinch flinches flinched wince winces winced shiver shivers shivered shudder shudders shuddered tremble trembles trembled gasp gasps gasped cough coughs coughed choke chokes choked sneeze sneezes sneezed freeze freezes froze stagger staggers staggered stumble stumbles stumbled blink blinks blinked sweat sweats sweated blush blushes blushed gag gags gagged recoil recoils recoiled jolt jolts jolted startle startles startled fall falls fell slip slips slipped wake wakes woke awaken awakens awakened".split(
+      " "
+    )
+  );
+  function findOverstep(text, sentences, options) {
+    const mask = quoteMask(text);
+    const typed = new Set(words(options.playerInput ?? "").map(stem));
+    for (let index = 0; index < sentences.length; index++) {
+      const sentence = sentences[index];
+      let narration = "";
+      for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? " " : text[i];
+      const reason = checkSentence(sentence.text.trim(), narration.trim(), typed, options);
+      if (reason) return { index, reason };
+    }
+    return void 0;
+  }
+  function checkSentence(raw, narration, typed, options) {
+    if (raw.startsWith(">")) return "starts a new player action (>)";
+    if (narration === "") return void 0;
+    for (const [pattern, reason] of PROMPTS) if (pattern.test(narration)) return reason;
+    if (SPEECH.test(narration)) return "your character speaks";
+    if (DECISION.test(narration)) return "your character makes a decision";
+    if (THOUGHT.test(narration)) return "your character's thoughts";
+    for (const match of narration.matchAll(SUBJECT_YOU)) {
+      const verb = match[1].toLowerCase();
+      if (PERCEPTION.has(verb) || typed.has(stem(verb))) continue;
+      if (REACTIONS.has(verb)) {
+        if (options.strict) return `your character reacts ("you ${verb}"), and strict mode is on`;
+        continue;
+      }
+      if (options.actions) return `an action you didn't type ("you ${verb}")`;
+    }
+    return void 0;
+  }
+  function words(text) {
+    return text.toLowerCase().match(/[a-z'’]+/g) ?? [];
+  }
+  function stem(word) {
+    const w = word.toLowerCase();
+    if (w.length > 4 && /ies$|ied$/.test(w)) return w.slice(0, -3) + "y";
+    if (w.length > 5 && w.endsWith("ing")) return w.slice(0, -3);
+    if (w.length > 4 && w.endsWith("ed")) return w.slice(0, -2);
+    if (w.length > 4 && w.endsWith("es")) return w.slice(0, -2);
+    if (w.length > 3 && w.endsWith("s") && !w.endsWith("ss")) return w.slice(0, -1);
+    return w;
   }
 
-  // src/diagnostics/stopTest.ts
-  var TECHNIQUES = [
-    { id: "stop-with-text", label: "Cut and stop in one step" },
-    { id: "release-then-stop", label: "Let the text through, then stop on the next call" },
-    { id: "hide-rest", label: "Hide everything after the cut, without stopping" }
-  ];
-  var HELP = [
-    "Checks how NovelAI reacts when the script cuts a response short. The result decides how Phase 1 is built.",
-    "",
-    "1. Tick the box below.",
-    "2. Take **three** normal turns with the Do/Say box. Pick actions that should get several sentences back. Each turn tries a different way of cutting.",
-    "3. After the third turn, press **Copy report** and paste the report to Claude.",
-    "",
-    "Turns will look cut short, or may lose their text entirely; that is part of what is being measured. Undo them afterwards if you like."
-  ].join("\n");
-  var lastTaInput;
-  var run;
-  async function initDiagnostics() {
-    await api.v1.storyStorage.setIfAbsent(KEYS.diagReport, "No test run yet.");
-  }
-  function registerDiagnosticsHooks() {
-    api.v1.hooks.register("onTextAdventureInput", ({ continuityId, mode, inputText, rawInputText }) => {
-      lastTaInput = { continuityId, mode, inputText, rawInputText };
-    });
-    api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model }) => {
-      if (await api.v1.storyStorage.get(KEYS.diagArmed) !== true) return;
-      const step = Math.min(Number(await api.v1.storyStorage.get(KEYS.diagStep)) || 0, TECHNIQUES.length - 1);
-      const settings = await api.v1.generationParameters.get().catch(() => void 0);
-      run = {
-        technique: TECHNIQUES[step],
-        step,
-        continuityId,
-        model,
-        maxTokens: settings?.max_tokens,
-        taInput: lastTaInput,
-        nodeBefore: await api.v1.document.history.currentNodeId().catch(() => void 0),
-        responseCalls: 0,
-        heldCalls: 0,
-        released: "",
-        afterCutCalls: 0,
-        afterCutChars: 0,
-        afterCutResent: false,
-        endedEarly: false,
-        generationEnded: false,
-        checks: [],
-        documentTail: [],
-        concluded: false
-      };
-    });
-    api.v1.hooks.register("onContextBuilt", ({ continuityId, dryRun, messages }) => {
-      if (run?.continuityId === continuityId && !dryRun) run.context = summarizeMessages(messages);
-    });
-    api.v1.hooks.register("onResponse", onResponse);
-    api.v1.hooks.register("onGenerationEnd", async ({ continuityId }) => {
-      const r = run;
-      if (!r || r.continuityId !== continuityId || r.concluded) return;
-      r.generationEnded = true;
-      await check(r, "At generation end");
-      later(r, 2e3, "2 s later");
-    });
-  }
-  var onResponse = async ({ continuityId, text, final }) => {
-    const r = run;
-    if (!r || r.continuityId !== continuityId || r.concluded) return;
-    r.responseCalls++;
-    const joined = text.join("");
-    if (final) {
-      r.finalCall = `#${r.responseCalls}, ${text.length} chunks, ${joined.length} chars, starts ${quote(joined.slice(0, 60), 60)}`;
-    }
-    if (r.wanted !== void 0) return afterCut(r, text, joined);
-    if (r.endedEarly) return;
-    if (r.released && r.midStreamVisible === void 0) {
-      r.midStreamVisible = normalize((await readDocument()).text).includes(normalize(r.released));
-    }
-    const end = findSentenceEnd(joined);
-    if (end < 0 || !r.released && final) {
-      if (final) {
-        r.endedEarly = true;
-        return;
-      }
-      r.heldCalls++;
-      return { seenData: 0 };
-    }
-    if (!r.released) {
-      const count = chunksCovering(text, end);
-      r.released = text.slice(0, count).join("");
-      return { seenData: count };
-    }
-    r.wanted = r.released + joined.slice(0, end);
-    r.cutCall = r.responseCalls;
-    r.cutOnFinal = final;
-    later(r, 4e3, "No onGenerationEnd; 4 s after the cut", true);
-    const kept = truncateChunks(text, end);
-    return r.technique.id === "stop-with-text" ? { text: kept, stopGeneration: true } : { text: kept };
-  };
-  function afterCut(r, text, joined) {
-    const wanted = r.wanted ?? "";
-    r.afterCutCalls++;
-    r.afterCutChars += joined.length;
-    const resent = wanted !== "" && joined.startsWith(wanted);
-    if (resent) r.afterCutResent = true;
-    const out = resent ? truncateChunks(text, wanted.length) : text.map(() => "");
-    return r.technique.id === "hide-rest" ? { text: out } : { text: out, stopGeneration: true };
-  }
-  function later(r, delay, label, onlyWithoutGenerationEnd = false) {
-    api.v1.timers.setTimeout(() => {
-      if (r.concluded || onlyWithoutGenerationEnd && r.generationEnded) return;
-      check(r, label).then(() => conclude(r)).catch(logError);
-    }, delay).catch(logError);
-  }
-  async function check(r, label) {
-    const doc = await readDocument();
-    r.checks.push({ label, verdict: judge(r, doc.text) });
-    r.documentTail = doc.tail;
-    r.nodeAfter = await api.v1.document.history.currentNodeId().catch(() => void 0);
-    r.latestGenerationNode = await api.v1.document.history.mostRecentGenerationNodeId().catch(() => void 0);
-  }
-  async function conclude(r) {
-    if (r.concluded) return;
-    r.concluded = true;
-    const turns = await api.v1.storyStorage.get(KEYS.diagTurns) ?? [];
-    turns[r.step] = formatTurn(r);
-    await api.v1.storyStorage.set(KEYS.diagTurns, turns);
-    const noHooks = r.responseCalls === 0;
-    const step = r.wanted === void 0 ? r.step : r.step + 1;
-    const done = noHooks || step >= TECHNIQUES.length;
-    await api.v1.storyStorage.set(KEYS.diagStep, step);
-    if (done) await api.v1.storyStorage.set(KEYS.diagArmed, false);
-    await api.v1.storyStorage.set(KEYS.diagReport, formatReport(turns, step, r));
-    if (noHooks) await toast("Stop test stopped: onResponse never ran. See the report.", "warning");
-    else if (r.wanted === void 0) await toast(`Stop test turn ${r.step + 1}: the response was too short. Take another turn.`, "warning");
-    else if (!done) await toast(`Stop test turn ${r.step + 1} of ${TECHNIQUES.length} done. Take your next turn.`, "info");
-    else await toast("Stop test finished. Press Copy report in the Text Adventure+ panel.", "success");
-  }
-  async function resetTest() {
-    run = void 0;
-    await api.v1.storyStorage.set(KEYS.diagStep, 0);
-    await api.v1.storyStorage.set(KEYS.diagTurns, []);
-    await api.v1.storyStorage.set(KEYS.diagReport, `Armed. Take your next turn (1 of ${TECHNIQUES.length}).`);
-  }
-  async function copyReport() {
-    const granted = await api.v1.permissions.request(
-      "clipboardWrite",
-      "Text Adventure+ needs clipboard access to copy the stop test report."
-    );
-    if (!granted) return;
-    const report = await api.v1.storyStorage.get(KEYS.diagReport);
-    await api.v1.clipboard.writeText(String(report ?? ""));
-    await toast("Report copied.", "success");
-  }
-  function judge(r, documentText) {
-    if (r.responseCalls === 0) {
-      return "FAIL: onResponse never ran. The live cut-off needs a chat-endpoint model such as Xialong or GLM 4.6.";
-    }
-    if (r.wanted === void 0) {
-      if (r.responseCalls === 1) return "INCONCLUSIVE: the whole response arrived at once. Streaming may be off.";
-      return "INCONCLUSIVE: the response ended before two full sentences.";
-    }
-    const doc = normalize(documentText);
-    const wanted = normalize(r.wanted);
-    const released = normalize(r.released);
-    if (doc.endsWith(wanted)) return "PASS: exactly the text up to the cut is in the editor.";
-    if (doc.includes(wanted)) {
-      return `PARTIAL: text after the cut got through: ${quote(doc.slice(doc.lastIndexOf(wanted) + wanted.length).trim(), 120)}`;
-    }
-    if (doc.endsWith(released)) return "PARTIAL: only the first sentence is in the editor; the second was dropped.";
-    if (doc.includes(released)) {
-      return `PARTIAL: the first sentence is there, followed by unexpected text: ${quote(doc.slice(doc.lastIndexOf(released) + released.length).trim(), 120)}`;
-    }
-    return "FAIL: none of the generated text is in the editor.";
-  }
-  function formatTurn(r) {
-    const ta = r.taInput;
-    const taText = ta ? `${ta.mode} ${quote(ta.inputText, 80)}${ta.continuityId === r.continuityId ? "" : " (from an earlier turn)"}` : "none";
-    const visible2 = r.midStreamVisible === void 0 ? "not checked" : yesNo(r.midStreamVisible);
+  // src/guard/referee.ts
+  var TIMEOUT_MS = 12e3;
+  var MAX_OUTPUT_TOKENS = 8;
+  function refereePrompt({ storyTail, playerInput, sentences, strict }) {
+    const allowed = strict ? "Allowed: carrying out exactly what the player typed, and what the player character sees and hears. Nothing else about the player character, not even physical reactions." : "Allowed: carrying out what the player typed, what the player character sees and hears, and involuntary physical reactions such as a flinch or a racing heart.";
+    const user = [
+      "Story just before the player's turn:",
+      '"""',
+      storyTail?.trim() || "(start of story)",
+      '"""',
+      "",
+      "The player typed:",
+      '"""',
+      playerInput?.trim() || "(nothing; the story just continues)",
+      '"""',
+      "",
+      "The narrator replied with these sentences:",
+      ...sentences.map((s, i) => `${i + 1}. ${s.trim()}`),
+      "",
+      "Which is the first sentence where the narrator writes for the player character? That means any of:",
+      "- the player character speaking, including quoted lines that are the player character's words even when no speaker is named",
+      "- the player character's thoughts, questions to themselves, conclusions or plans",
+      "- the player character deciding something, or doing something deliberate that the player did not type",
+      "- asking the player what they do, offering them choices, or speaking to the player directly",
+      allowed,
+      "",
+      "Answer with the sentence number only, or 0 if no sentence breaks the rule."
+    ].join("\n");
     return [
-      `Turn ${r.step + 1} of ${TECHNIQUES.length}: ${r.technique.label}`,
-      ...r.checks.map((c) => `  ${c.label}: ${c.verdict}`),
-      `  onResponse calls: ${r.responseCalls} (held back ${r.heldCalls}) | cut at call ${r.cutCall ?? "-"} (final: ${yesNo(r.cutOnFinal)}) | after the cut: ${r.afterCutCalls} calls, ${r.afterCutChars} chars, whole response resent: ${yesNo(r.afterCutResent)}`,
-      `  Final call: ${r.finalCall ?? "never arrived"} | onGenerationEnd: ${yesNo(r.generationEnded)} | first sentence visible mid-stream: ${visible2}`,
-      `  History node: ${r.nodeBefore ?? "?"} -> ${r.nodeAfter ?? "?"} (latest generation node: ${r.latestGenerationNode ?? "none"})`,
-      `  Model: ${r.model} | max_tokens: ${r.maxTokens ?? "unknown"} | TA input: ${taText}`,
-      r.wanted === void 0 ? `  Released: ${quote(r.released, 200)} (never reached the cut)` : `  Should remain: ${quote(r.wanted, 240)}`
+      {
+        role: "system",
+        content: 'You are a strict referee for a second-person text adventure. The player controls the character called "you". The narrator may describe the world and the other characters, but must never write for the player character.'
+      },
+      { role: "user", content: user }
+    ];
+  }
+  function parseRefereeAnswer(raw, count) {
+    const text = raw.trim().toLowerCase();
+    if (/^(?:none|no\b)/.test(text)) return 0;
+    const match = /\d+/.exec(text);
+    if (!match) return void 0;
+    const answer = Number(match[0]);
+    return answer <= count ? answer : void 0;
+  }
+  async function askReferee(model, input) {
+    const started = Date.now();
+    const elapsed = () => Date.now() - started;
+    if (api.v1.script.getAllowedOutput() < MAX_OUTPUT_TOKENS) {
+      return { raw: "", ms: 0, error: "the script's generation allowance is used up for now" };
+    }
+    const signal = await api.v1.createCancellationSignal();
+    try {
+      const request = api.v1.generate(
+        refereePrompt(input),
+        { model, max_tokens: MAX_OUTPUT_TOKENS, temperature: 0, enable_thinking: false },
+        void 0,
+        "background",
+        signal
+      );
+      request.catch(() => {
+      });
+      const timeout = new Promise((resolve) => {
+        api.v1.timers.setTimeout(() => resolve("timeout"), TIMEOUT_MS).catch(() => resolve("timeout"));
+      });
+      const response = await Promise.race([request, timeout]);
+      if (response === "timeout") {
+        signal.cancel().catch(() => {
+        });
+        return { raw: "", ms: elapsed(), error: `no answer within ${TIMEOUT_MS / 1e3} s` };
+      }
+      const raw = response.choices[0]?.text ?? "";
+      const answer = parseRefereeAnswer(raw, input.sentences.length);
+      return answer === void 0 ? { raw, ms: elapsed(), error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer, raw, ms: elapsed() };
+    } catch (error) {
+      return { raw: "", ms: elapsed(), error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      signal.dispose();
+    }
+  }
+
+  // src/guard/rules.ts
+  function narratorRules(strict) {
+    const playerCharacter = strict ? "- Never write anything the player character says, thinks, feels, decides or does beyond what the player typed. Describe only the world and the other characters." : "- Never write the player character's speech, thoughts, conclusions, decisions or deliberate actions beyond what the player typed. Involuntary physical reactions (a flinch, a cough, a racing heart) are fine.";
+    return [
+      "[ Narration rules for this reply:",
+      "- Write only what happens because of the player's latest input: how the world, the other characters and any companions respond, and what the player character sees and hears.",
+      playerCharacter,
+      "- Stop as soon as the player character would need to speak, act or decide. End on the world, never on a question: do not ask what the player does, offer choices or address the player. ]"
     ].join("\n");
   }
-  function formatReport(turns, step, latest) {
-    const lines = [
-      `Text Adventure+ stop test (v${api.v1.script.version}): ${Math.min(step, TECHNIQUES.length)} of ${TECHNIQUES.length} turns done`,
-      "",
-      ...turns.filter(Boolean).flatMap((turn) => [turn, ""]),
-      "Latest turn, context sent to the AI:",
-      ...latest.context ?? ["(not recorded)"],
-      "",
-      "Latest turn, end of document:",
-      ...latest.documentTail
-    ];
-    return lines.join("\n").replace(/\{\{/g, "{ {");
+  function withRules(messages, rules) {
+    const result = messages.map((m) => ({ ...m }));
+    let target = -1;
+    for (let i = result.length - 1; i >= 0 && target < 0; i--) if (result[i].role === "user") target = i;
+    if (target < 0) target = result.findIndex((m) => m.role === "system");
+    if (target < 0) return [{ role: "system", content: rules }, ...result];
+    const content = result[target].content ?? "";
+    result[target].content = content ? `${content}
+
+${rules}` : rules;
+    return result;
   }
-  async function readDocument() {
-    const sections = await api.v1.document.scan();
-    const text = sections.map(({ section }) => section.text).join("\n");
-    const tail = sections.slice(-5).map(({ section }) => {
-      const origins = [...new Set(section.origin.map((o) => o.data))].join("+") || "none";
-      return `[${section.source ?? "story"} | ${origins}] ${quote(section.text, 160)}`;
+  function turnContext(messages) {
+    let lastStory = -1;
+    for (let i = messages.length - 1; i >= 0 && lastStory < 0; i--) {
+      if (messages[i].role === "assistant" && (messages[i].content ?? "").trim()) lastStory = i;
+    }
+    let playerInput;
+    for (let i = messages.length - 1; i > lastStory && playerInput === void 0; i--) {
+      if (messages[i].role === "user") playerInput = messages[i].content;
+    }
+    const story = lastStory >= 0 ? messages[lastStory].content ?? "" : "";
+    return { playerInput, storyTail: story.slice(-1200) || void 0 };
+  }
+
+  // src/guard/turnGuard.ts
+  var turns = /* @__PURE__ */ new Map();
+  var ruleTokens = /* @__PURE__ */ new Map();
+  function registerTurnGuard() {
+    api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model, scriptInitiated, inlineGeneration, toolboxMode }) => {
+      if (scriptInitiated || inlineGeneration || toolboxMode || !await isEnabled()) return;
+      turns.set(continuityId, { model, ...await readSettings() });
     });
-    return { text, tail };
-  }
-  function summarizeMessages(messages) {
-    return messages.map((m, i) => {
-      const content = m.content ?? "";
-      return `#${i} ${m.role}, ${content.length} chars: starts ${quote(content.slice(0, 80), 80)} … ends ${quote(content, 160)}`;
+    api.v1.hooks.register("onBeforeContextBuild", async ({ continuityId, model, dryRun }) => {
+      const settings = await settingsFor(continuityId, dryRun);
+      if (!settings) return;
+      return { contextLimitReduction: await rulesTokens(model, settings.strict) };
+    });
+    api.v1.hooks.register("onContextBuilt", async ({ continuityId, dryRun, messages }) => {
+      const settings = await settingsFor(continuityId, dryRun);
+      if (!settings) return;
+      const turn = turns.get(continuityId);
+      if (turn && !dryRun) Object.assign(turn, turnContext(messages));
+      return { messages: withRules(messages, narratorRules(settings.strict)) };
+    });
+    api.v1.hooks.register("onResponse", async ({ continuityId, text, final }) => {
+      const turn = turns.get(continuityId);
+      if (!turn) return;
+      if (!final) return { seenData: 0 };
+      const decision = await decide(turn, text.join(""));
+      report(turn, decision).catch(logError);
+      if (decision.keep === decision.reply.length) return;
+      return { text: truncateChunks(text, decision.keep) };
+    });
+    api.v1.hooks.register("onGenerationEnd", ({ continuityId }) => {
+      turns.delete(continuityId);
     });
   }
-  function normalize(text) {
-    return text.replace(/\s+/g, " ").trim();
+  async function decide(turn, reply) {
+    const sentences = splitSentences(reply);
+    const options = { strict: turn.strict, playerInput: turn.playerInput };
+    const byRules = (overstep) => overstep ? { ...overstep, by: "rules" } : void 0;
+    let cut = byRules(findOverstep(reply, sentences, { ...options, actions: !turn.referee }));
+    let referee;
+    const checkUpTo = cut ? cut.index : sentences.length;
+    if (turn.referee && checkUpTo > 0) {
+      referee = await askReferee(turn.model, {
+        storyTail: turn.storyTail,
+        playerInput: turn.playerInput,
+        sentences: sentences.slice(0, checkUpTo).map((s) => s.text),
+        strict: turn.strict
+      });
+      if (referee.answer) {
+        cut = { index: referee.answer - 1, reason: "writes for your character", by: "referee" };
+      } else if (referee.error) {
+        const fallback = byRules(findOverstep(reply, sentences, { ...options, actions: true }));
+        if (fallback && (!cut || fallback.index < cut.index)) cut = fallback;
+      }
+    }
+    let keep = cut ? sentences[cut.index].start : reply.length;
+    let unfinishedTrimmed = false;
+    const last = sentences[sentences.length - 1];
+    if (!cut && sentences.length > 1 && !isComplete(last.text)) {
+      keep = last.start;
+      unfinishedTrimmed = true;
+    }
+    while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
+    return { reply, sentences, keep, cut, unfinishedTrimmed, referee };
+  }
+  async function report(turn, decision) {
+    await api.v1.storyStorage.set(KEYS.lastTurnStatus, sanitize(statusText(decision)));
+    await api.v1.storyStorage.set(KEYS.lastTurnDetails, sanitize(detailsText(turn, decision)));
+    if (decision.keep === 0 && decision.reply.trim()) {
+      await api.v1.ui.toast(
+        "Text Adventure+: the reply started by writing for your character, so nothing was added. Press Retry.",
+        { type: "warning" }
+      );
+    }
+  }
+  function statusText(d) {
+    if (!d.reply.trim()) return "Last turn: the AI wrote nothing.";
+    const total = d.sentences.length;
+    const kept = d.sentences.filter((s) => s.start < d.keep).length;
+    const lines = [];
+    if (d.cut) {
+      const sentence = quote(d.sentences[d.cut.index].text.trim(), 120);
+      lines.push(
+        kept === 0 ? `Last turn: nothing was kept. The reply started by writing for your character: ${sentence}` : `Last turn: kept ${kept} of ${total} sentences. Cut from: ${sentence}`,
+        `Why: ${d.cut.reason} (found by the ${d.cut.by === "referee" ? "referee" : "pattern rules"}).`
+      );
+    } else if (d.unfinishedTrimmed) {
+      lines.push(`Last turn: kept ${kept} of ${total} sentences, minus an unfinished last sentence.`);
+    } else {
+      lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? "" : "s"}).`);
+    }
+    if (d.referee) {
+      lines.push(
+        d.referee.error ? `Referee: unavailable (${d.referee.error}), so the pattern rules checked for actions too.` : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : "no problems"} (${(d.referee.ms / 1e3).toFixed(1)} s).`
+      );
+    }
+    return lines.join("\n");
+  }
+  function detailsText(turn, d) {
+    const marks = d.sentences.map((s, i) => {
+      const mark = s.start < d.keep ? "✓" : d.cut?.index === i ? "✂" : "·";
+      return `  ${i + 1} ${mark} ${quote(s.text.trim(), 400)}`;
+    });
+    return [
+      `Text Adventure+ last turn (v${api.v1.script.version})`,
+      `Model: ${turn.model} | strict: ${turn.strict ? "on" : "off"} | referee: ${turn.referee ? "on" : "off"}`,
+      `Player input: ${turn.playerInput === void 0 ? "(none)" : quote(turn.playerInput, 400)}`,
+      statusText(d),
+      d.referee ? `Referee answer: ${quote(d.referee.raw, 40)}` : "Referee: not asked",
+      "Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):",
+      ...marks,
+      `Story just before: ${quote(turn.storyTail ?? "", 400)}`
+    ].join("\n");
+  }
+  async function isEnabled() {
+    return await api.v1.storyStorage.get(KEYS.enabled) === true;
+  }
+  async function readSettings() {
+    return {
+      strict: await api.v1.storage.get(KEYS.strict) === true,
+      referee: await api.v1.storage.get(KEYS.referee) !== false
+    };
+  }
+  async function settingsFor(continuityId, dryRun) {
+    const turn = turns.get(continuityId);
+    if (turn) return turn;
+    if (dryRun && await isEnabled()) return readSettings();
+    return void 0;
+  }
+  async function rulesTokens(model, strict) {
+    const key = `${model}|${strict}`;
+    let count = ruleTokens.get(key);
+    if (count === void 0) {
+      const rules = `
+
+${narratorRules(strict)}`;
+      count = await api.v1.tokenizer.encode(rules, model).then((tokens) => tokens.length).catch(() => Math.ceil(rules.length / 3));
+      ruleTokens.set(key, count);
+    }
+    return count + 4;
   }
   function quote(text, max) {
-    return JSON.stringify(text.length > max ? "…" + text.slice(-max) : text);
+    return JSON.stringify(text.length > max ? text.slice(0, max) + "…" : text);
   }
-  function yesNo(value) {
-    return value ? "yes" : "no";
-  }
-  function toast(message, type) {
-    return api.v1.ui.toast(message, { type });
-  }
-  function diagnosticsSection() {
-    return {
-      type: "collapsibleSection",
-      title: "Diagnostics: stop test",
-      iconId: "activity",
-      content: [
-        { type: "text", markdown: true, text: HELP },
-        {
-          type: "checkboxInput",
-          label: "Run the stop test on my next three turns",
-          storageKey: `story:${KEYS.diagArmed}`,
-          onChange: (on) => {
-            if (on) resetTest().catch(logError);
-          }
-        },
-        {
-          type: "button",
-          text: "Copy report",
-          iconId: "copy",
-          callback: () => copyReport().catch(logError)
-        },
-        {
-          type: "text",
-          text: `{{story:${KEYS.diagReport}}}`,
-          style: { whiteSpace: "pre-wrap", fontSize: "0.85em" }
-        }
-      ]
-    };
+  function sanitize(text) {
+    return text.replace(/\{\{/g, "{ {");
   }
 
   // src/ui/storyPanels.ts
@@ -425,7 +541,7 @@ memoryLimit: 8
           {
             type: "text",
             markdown: true,
-            text: `**Text Adventure+** v${api.v1.script.version} (Phase 0 preview)`
+            text: `**Text Adventure+** v${api.v1.script.version}`
           },
           {
             type: "checkboxInput",
@@ -437,23 +553,71 @@ memoryLimit: 8
           },
           {
             type: "text",
-            text: "When enabled, Party and Inventory tabs appear above the bottom controls.",
+            text: "When enabled, the AI stops at your turn, and Party and Inventory tabs appear above the bottom controls.",
             style: { opacity: 0.7 }
           },
-          diagnosticsSection()
+          {
+            type: "checkboxInput",
+            label: "Referee: double-check each reply with a quick AI call",
+            storageKey: KEYS.referee
+          },
+          {
+            type: "checkboxInput",
+            label: "Strict: no physical reactions from your character either",
+            storageKey: KEYS.strict
+          },
+          {
+            type: "collapsibleSection",
+            title: "Last turn",
+            iconId: "activity",
+            content: [
+              {
+                type: "text",
+                text: `{{story:${KEYS.lastTurnStatus}}}`,
+                style: { whiteSpace: "pre-wrap", fontSize: "0.9em" }
+              },
+              {
+                type: "button",
+                text: "Copy details",
+                iconId: "copy",
+                callback: () => copyDetails().catch(logError)
+              },
+              {
+                type: "text",
+                text: "If a turn was cut wrongly, or should have been cut, copy its details and send them to Claude.",
+                style: { opacity: 0.7, fontSize: "0.85em" }
+              }
+            ]
+          }
         ]
       }
     ]);
   }
+  async function copyDetails() {
+    const details = await api.v1.storyStorage.get(KEYS.lastTurnDetails);
+    if (!details) {
+      await api.v1.ui.toast("No turn has been checked in this story yet.", { type: "info" });
+      return;
+    }
+    const granted = await api.v1.permissions.request(
+      "clipboardWrite",
+      "Text Adventure+ needs clipboard access to copy the last turn's details."
+    );
+    if (!granted) return;
+    await api.v1.clipboard.writeText(String(details));
+    await api.v1.ui.toast("Details copied.", { type: "success" });
+  }
 
   // src/main.ts
   async function init() {
-    await initDiagnostics();
+    await api.v1.storage.setIfAbsent(KEYS.referee, true);
+    await api.v1.storyStorage.setIfAbsent(KEYS.lastTurnStatus, "No turn checked yet.");
+    for (const key of OLD_STORY_KEYS) await api.v1.storyStorage.remove(key);
     await registerSettingsPanel();
     const enabled = await api.v1.storyStorage.get(KEYS.enabled) === true;
     await setStoryPanelsVisible(enabled);
     api.v1.log(`Text Adventure+ v${api.v1.script.version} loaded (enabled for this story: ${enabled})`);
   }
-  registerDiagnosticsHooks();
+  registerTurnGuard();
   init().catch(logError);
 })();

@@ -1,66 +1,72 @@
 // A minimal stand-in for NovelAI's `api.v1`, enough to run the script's hooks in Node.
-// The streaming emulation follows the documented onResponse rules: unseen chunks are resent on the
-// next call, and on the final call everything is placed regardless of seenData. The options switch
-// on behaviours NovelAI might have but doesn't document, so tests can check the script copes.
+//
+// It mimics what the Phase 0 stop tests showed about NovelAI (on Xialong):
+// - unseen chunks (seenData) are resent on the next call; on the final call everything is placed;
+// - a script stop (stopGeneration in onResponse) discards everything the generation produced;
+// - the context is system, user (memory), assistant (story), user (latest inputs), empty assistant.
 
 type Hooks = Record<string, (params: any) => any>
 type Section = { text: string; source?: string; origin: { data: string }[] }
+type Message = { role: 'system' | 'user' | 'assistant'; content?: string }
 
 export type MockOptions = {
-  /** Whether text returned together with stopGeneration reaches the editor. */
-  placeTextOnStop?: boolean
-  /** Whether a script stop throws away everything the generation placed. */
-  discardOnStop?: boolean
-  /** Whether one more (final) onResponse call still arrives after a script stop. */
-  finalAfterStop?: boolean
-  /** Whether the final call carries the whole response and replaces what was streamed. */
-  finalResendsAll?: boolean
-  /** Whether onGenerationEnd fires after a script stopped the generation. */
-  endAfterStop?: boolean
+  /** What the referee answers. Defaults to "0" (nothing wrong). */
+  referee?: (messages: Message[]) => string | Promise<string>
+  /** Makes every api.v1.generate call fail with this message. */
+  generateError?: string
 }
 
 export function installMockApi(options: MockOptions = {}) {
   const hooks: Hooks = {}
   const story = new Map<string, unknown>()
+  const account = new Map<string, unknown>()
   const timers: (() => void)[] = []
   const toasts: string[] = []
+  const clipboard: string[] = []
   const sections: Section[] = []
+  const refereeCalls: Message[][] = []
   // Like NovelAI: register replaces all of the script's extensions, update adds or merges by id.
   const extensions = new Map<string, any>()
   let unnamed = 0
   const keyOf = (extension: any) => extension.id ?? `unnamed-${unnamed++}`
-  let historyNode = 1
-  let latestGenerationNode: number | undefined
+  const last: { context?: Message[]; contextLimitReduction?: number } = {}
 
-  const storage = {
-    get: async (key: string) => (story.has(key) ? structuredClone(story.get(key)) : undefined),
-    set: async (key: string, value: unknown) => void story.set(key, structuredClone(value)),
+  const storage = (map: Map<string, unknown>) => ({
+    get: async (key: string) => (map.has(key) ? structuredClone(map.get(key)) : undefined),
+    set: async (key: string, value: unknown) => void map.set(key, structuredClone(value)),
+    remove: async (key: string) => void map.delete(key),
     setIfAbsent: async (key: string, value: unknown) => {
-      if (story.has(key)) return false
-      story.set(key, value)
+      if (map.has(key)) return false
+      map.set(key, value)
       return true
     },
-  }
+  })
 
   ;(globalThis as any).api = {
     v1: {
-      script: { version: '0.0.0-test' },
+      script: { version: '0.0.0-test', getAllowedOutput: () => 2048 },
       log: () => {},
       error: (...messages: unknown[]) => console.error(...messages),
       hooks: { register: (name: string, callback: (params: any) => any) => void (hooks[name] = callback) },
-      storyStorage: storage,
-      generationParameters: { get: async () => ({ model: 'xialong-v1', max_tokens: 256 }) },
+      storage: storage(account),
+      storyStorage: storage(story),
+      tokenizer: { encode: async (text: string) => text.split(/\s+/) },
+      createCancellationSignal: async () => ({ cancelled: false, cancel: async () => {}, dispose: () => {} }),
+      generate: async (messages: Message[]) => {
+        if (options.generateError) throw new Error(options.generateError)
+        refereeCalls.push(messages)
+        const text = options.referee ? await options.referee(messages) : '0'
+        return { choices: [{ text, index: 0, token_ids: [] }] }
+      },
       timers: {
         setTimeout: async (callback: () => void) => timers.push(callback),
       },
       document: {
         scan: async () =>
           sections.map((section, index) => ({ sectionId: index + 1, index, section: { formatting: [], ...section } })),
-        history: {
-          currentNodeId: async () => historyNode,
-          mostRecentGenerationNodeId: async () => latestGenerationNode,
-        },
       },
+      permissions: { request: async () => true },
+      clipboard: { writeText: async (text: string) => void clipboard.push(text) },
       ui: {
         toast: async (message: string) => void toasts.push(message),
         register: async (list: any[]) => {
@@ -85,66 +91,56 @@ export function installMockApi(options: MockOptions = {}) {
     for (const line of rest) sections.push({ text: line, source: 'story', origin: [{ data: 'ai' }] })
   }
 
-  function restore(snapshot: Section[]) {
-    sections.splice(0, sections.length, ...structuredClone(snapshot))
-  }
-
   return {
     hooks,
     story,
+    account,
     toasts,
+    clipboard,
     sections,
     extensions,
+    refereeCalls,
+    last,
     runTimers: async () => {
       for (const callback of timers.splice(0)) await callback()
       await new Promise((resolve) => setTimeout(resolve, 0))
     },
+    /** Waits for fire-and-forget work (like the last-turn report) to finish. */
+    settle: () => new Promise((resolve) => setTimeout(resolve, 0)),
 
-    /** Plays one Text Adventure turn: the input, context building, then the streamed response. */
+    /** Plays one Text Adventure turn: the input, context building, then the streamed reply. */
     async playTurn(input: string, chunks: string[], batchSize = 1) {
       const continuityId = `turn-${Math.random()}`
       const model = 'xialong-v1'
+      const storyText = sections.map((s) => s.text).join('\n')
       await hooks.onTextAdventureInput?.({ continuityId, inputText: input, rawInputText: input, mode: 'action' })
-      sections.push({ text: `> You ${input}.`, source: 'action', origin: [{ data: 'user' }] })
+      sections.push({ text: input, source: 'action', origin: [{ data: 'user' }] })
       sections.push({ text: '', source: 'story', origin: [{ data: 'ai' }] })
+      const before = structuredClone(sections)
+
       const request = await hooks.onGenerationRequested?.({ continuityId, model, scriptInitiated: false })
       if (request?.stopGeneration) return
-      await hooks.onContextBuilt?.({
-        continuityId,
-        model,
-        dryRun: false,
-        messages: [
-          { role: 'system', content: 'You are a narrator.' },
-          { role: 'assistant', content: sections.map((s) => s.text).join('\n') },
-        ],
-      })
-
-      const before = structuredClone(sections)
-      const respond = async (text: string[], final: boolean) =>
-        (await hooks.onResponse?.({ continuityId, model, final, text, logprobs: [], tokenIds: text.map(() => []) })) ?? {}
+      const built = await hooks.onBeforeContextBuild?.({ continuityId, model, dryRun: false })
+      last.contextLimitReduction = built?.contextLimitReduction
+      const messages: Message[] = [
+        { role: 'system', content: 'You are Xialong.' },
+        { role: 'user', content: 'Relevant persistent information:\n[ Genre: fantasy ]\n***\nWrite.' },
+        { role: 'assistant', content: storyText },
+        { role: 'user', content: input },
+        { role: 'assistant', content: '' },
+      ]
+      const context = await hooks.onContextBuilt?.({ continuityId, model, dryRun: false, messages })
+      last.context = context?.messages ?? messages
 
       let unseen: string[] = []
-      let stopped = false
       for (let i = 0; i < chunks.length; i += batchSize) {
         const final = i + batchSize >= chunks.length
-        const text = final && options.finalResendsAll ? chunks : [...unseen, ...chunks.slice(i, i + batchSize)]
-        const result = await respond(text, final)
+        const text = [...unseen, ...chunks.slice(i, i + batchSize)]
+        const result =
+          (await hooks.onResponse?.({ continuityId, model, final, text, logprobs: [], tokenIds: text.map(() => []) })) ?? {}
         const out: string[] = result.text ?? text
-        if (final && options.finalResendsAll) {
-          restore(before)
-          place(out.join(''))
-          break
-        }
         if (result.stopGeneration) {
-          stopped = true
-          if (options.discardOnStop) restore(before)
-          else if (options.placeTextOnStop ?? true) place(out.join(''))
-          if (options.finalAfterStop && !final) {
-            const last = options.finalResendsAll ? chunks : chunks.slice(i + batchSize, i + 2 * batchSize)
-            const lastOut: string[] = (await respond(last, true)).text ?? last
-            if (options.finalResendsAll) restore(before)
-            if (!options.discardOnStop) place(lastOut.join(''))
-          }
+          sections.splice(0, sections.length, ...before)
           break
         }
         const seen = final || result.seenData === undefined || result.seenData === true
@@ -153,9 +149,14 @@ export function installMockApi(options: MockOptions = {}) {
         place(out.slice(0, seen).join(''))
         unseen = out.slice(seen)
       }
+      await hooks.onGenerationEnd?.({ continuityId, model })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    },
 
-      if (JSON.stringify(sections) !== JSON.stringify(before)) latestGenerationNode = ++historyNode
-      if (!stopped || (options.endAfterStop ?? true)) await hooks.onGenerationEnd?.({ continuityId, model })
+    /** The text the last turn added to the story. */
+    lastReply() {
+      const index = sections.findLastIndex((s) => s.origin[0]?.data === 'user')
+      return sections.slice(index + 1).map((s) => s.text).join('\n')
     },
   }
 }

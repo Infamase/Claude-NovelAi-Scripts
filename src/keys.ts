@@ -1,12 +1,19 @@
-// Storage keys (all kept in the current story via api.v1.storyStorage) and UI extension ids.
+// Storage keys and UI extension ids.
 
 export const KEYS = {
+  /** Story: whether the script is on for this story. */
   enabled: 'tap.enabled',
-  diagArmed: 'tap.diag.armed',
-  diagReport: 'tap.diag.report',
-  diagStep: 'tap.diag.step',
-  diagTurns: 'tap.diag.turns',
+  /** Account: strict mode (no physical reactions from the player character either). */
+  strict: 'tap.strict',
+  /** Account: whether the referee double-checks replies. */
+  referee: 'tap.referee',
+  /** Story: summary and full details of the last guarded turn. */
+  lastTurnStatus: 'tap.lastTurn.status',
+  lastTurnDetails: 'tap.lastTurn.details',
 } as const
+
+/** Keys used by earlier versions, removed on load. */
+export const OLD_STORY_KEYS = ['tap.diag.armed', 'tap.diag.report', 'tap.diag.step', 'tap.diag.turns', 'tap.diag.lastRun']
 
 export const IDS = {
   settingsPanel: 'tap-settings',

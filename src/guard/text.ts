@@ -48,6 +48,49 @@ export function findSentenceEnd(text: string): number {
   return -1
 }
 
+export type Sentence = { start: number; end: number; text: string }
+
+/**
+ * Splits a finished reply into sentences. Each sentence starts where the previous one ended, so
+ * leading whitespace and line breaks belong to the sentence after them.
+ */
+export function splitSentences(text: string): Sentence[] {
+  const sentences: Sentence[] = []
+  let start = 0
+  while (start < text.length && text.slice(start).trim() !== '') {
+    const end = findSentenceEnd(text.slice(start))
+    const stop = end < 0 ? text.length : start + end
+    sentences.push({ start, end: stop, text: text.slice(start, stop) })
+    start = stop
+  }
+  return sentences
+}
+
+/** Whether a sentence ends properly, rather than being cut off mid-way by the length limit. */
+export function isComplete(sentence: string): boolean {
+  return /(?:[.!?…]|[—–-]["”’])["'”’)\]*_]*\s*$/.test(sentence)
+}
+
+/** Marks which characters are inside quoted speech. Quotes don't carry over a line break. */
+export function quoteMask(text: string): boolean[] {
+  const mask: boolean[] = []
+  let inside = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '\n') inside = false
+    if (ch === '“' || (ch === '"' && !inside)) {
+      mask.push(true)
+      inside = true
+    } else if (ch === '”' || ch === '"') {
+      mask.push(true)
+      inside = false
+    } else {
+      mask.push(inside)
+    }
+  }
+  return mask
+}
+
 /** How many leading chunks are needed to cover the first `length` characters. */
 export function chunksCovering(chunks: string[], length: number): number {
   let total = 0

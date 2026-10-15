@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { chunksCovering, findSentenceEnd, truncateChunks } from '../src/guard/text.ts'
+import { chunksCovering, findSentenceEnd, isComplete, quoteMask, splitSentences, truncateChunks } from '../src/guard/text.ts'
 
 describe('findSentenceEnd', () => {
   const firstSentence = (text: string) => {
@@ -65,5 +65,40 @@ describe('truncateChunks', () => {
     assert.deepEqual(truncateChunks(['The', ' ale.', ' The', ' end'], 8), ['The', ' ale.', '', ''])
     assert.deepEqual(truncateChunks(['The', ' ale. The'], 8), ['The', ' ale.'])
     assert.deepEqual(truncateChunks(['ab', 'cd'], 0), ['', ''])
+  })
+})
+
+describe('splitSentences', () => {
+  it('covers the text exactly, with whitespace leading each sentence', () => {
+    const text = 'The ale is warm. "Another?" he asks.\n\nYou nod and'
+    const sentences = splitSentences(text)
+    assert.deepEqual(sentences.map((s) => s.text), ['The ale is warm.', ' "Another?" he asks.', '\n\nYou nod and'])
+    assert.equal(sentences.map((s) => s.text).join(''), text)
+    assert.deepEqual(sentences.map((s) => [s.start, s.end]), [[0, 16], [16, 36], [36, 49]])
+  })
+
+  it('ignores trailing whitespace and handles empty text', () => {
+    assert.deepEqual(splitSentences('Done.  ').map((s) => s.text), ['Done.  '])
+    assert.deepEqual(splitSentences('  '), [])
+  })
+})
+
+describe('isComplete', () => {
+  it('tells finished sentences from cut-off ones', () => {
+    for (const done of ['It ends.', '"Go!"', 'Really?” ', 'Wait…', '"But—"']) assert.ok(isComplete(done), done)
+    for (const cut of ['The fire crackles as the', '"And then', 'She says,']) assert.ok(!isComplete(cut), cut)
+  })
+})
+
+describe('quoteMask', () => {
+  it('marks quoted speech, with straight, curly or mixed quotes', () => {
+    const text = '"Awake, are we?” A voice. “Good." End'
+    const inside = [...text].filter((_, i) => quoteMask(text)[i]).join('')
+    assert.equal(inside, '"Awake, are we?”“Good."')
+  })
+
+  it('does not carry an unclosed quote past a line break', () => {
+    const text = '"Unclosed\nNarration'
+    assert.equal(quoteMask(text).lastIndexOf(true), 8) // the 'd' before the line break
   })
 })
