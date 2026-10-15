@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792075766830
-version: 0.2.4
+updatedAt: 1792077777387
+version: 0.2.5
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -184,12 +184,39 @@ memoryLimit: 8
     const typed = new Set(words(options.playerInput ?? "").map(stem));
     for (let index = 0; index < sentences.length; index++) {
       const sentence = sentences[index];
-      let narration = "";
-      for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? " " : text[i];
-      const reason = checkSentence(sentence.text.trim(), narration.trim(), typed, options);
+      const reason = checkSentence(sentence.text.trim(), narrationOf(text, mask, sentence).trim(), typed, options);
       if (reason) return { index, reason };
     }
     return void 0;
+  }
+  var RETELLING_WINDOW = 4;
+  function findRetelling(text, sentences, playerInput) {
+    const lines = typedLines(playerInput);
+    if (lines.length === 0) return 0;
+    const mask = quoteMask(text);
+    let end = 0;
+    for (let i = 0; i < Math.min(sentences.length, RETELLING_WINDOW); i++) {
+      const squashed = squash(sentences[i].text);
+      if (!lines.some((line) => squashed.includes(line))) continue;
+      const own = narrationOf(text, mask, sentences[i]).trim();
+      const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]) : "";
+      const standalone = own === "" && /^["“][^"”]*["”]$/.test(sentences[i].text.trim());
+      if (SPEECH.test(own) || standalone && (i === 0 || YOU_AS_SUBJECT.test(before))) end = i + 1;
+    }
+    return end;
+  }
+  var YOU_AS_SUBJECT = /(?:^|[.;:,!?—–]\s*|\b(?:and|but|then|so|as|while|when)\s+)(?:you|your\s+\w+)\b/i;
+  function typedLines(input) {
+    const quotes = [...(input ?? "").matchAll(/["“]([^"”]+)["”]/g)].map((m) => m[1]);
+    return quotes.flatMap((quote2) => splitSentences(quote2).map((s) => squash(s.text))).filter((line) => line.length >= 4);
+  }
+  function squash(text) {
+    return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  }
+  function narrationOf(text, mask, sentence) {
+    let narration = "";
+    for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? " " : text[i];
+    return narration;
   }
   function checkSentence(raw, narration, typed, options) {
     if (raw.startsWith(">")) return "starts a new player action (>)";
@@ -247,7 +274,7 @@ memoryLimit: 8
       "The narrator replied with these sentences:",
       ...sentences.map((s, i) => `${i + 1}. ${s.trim()}`),
       "",
-      "Which is the first sentence where the narrator writes for the player character? That means any of:",
+      "The narrator writes for the player character when a sentence contains any of:",
       "- the player character speaking, including quoted lines that are the player character's words even when no speaker is named",
       "- the player character's thoughts, questions to themselves, conclusions or plans",
       "- the player character deciding something, or doing something deliberate that the player did not type",
@@ -255,7 +282,13 @@ memoryLimit: 8
       "- asking the player what they do, offering them choices, or speaking to the player directly",
       allowed,
       "",
-      "Only flag a sentence that clearly breaks the rule. Answer with the sentence number only, or 0 if no sentence breaks the rule."
+      "Replies sometimes open by retelling the player's own action, for example the player character saying the line the player typed, with thoughts or feelings added. If such an opening breaks the rule, it will be removed and the rest of the reply can still be used.",
+      "",
+      "Answer with two numbers separated by a space, and nothing else:",
+      "- first: if the reply opens with a retelling of the player's action that breaks the rule, the number of the sentence where that opening ends; otherwise 0",
+      "- second: the first sentence after that opening where the narrator writes for the player character; otherwise 0",
+      `For example, "0 0" means every sentence is fine, "0 4" means sentence 4 is the first problem, "2 0" means sentences 1 and 2 retell the player's action in a way that breaks the rule and the rest is fine, and "2 5" means the same with sentence 5 as the next problem.`,
+      "Only flag a sentence that clearly breaks the rule."
     ].join("\n");
     return [
       {
@@ -267,18 +300,21 @@ memoryLimit: 8
   }
   function parseRefereeAnswer(raw, count) {
     const text = raw.trim().toLowerCase();
-    if (/^(?:none|no\b)/.test(text)) return 0;
-    const match = /\d+/.exec(text);
-    if (!match) return void 0;
-    const answer = Number(match[0]);
-    return answer <= count ? answer : void 0;
+    if (/^(?:none|no\b)/.test(text)) return { retold: 0, flagged: 0 };
+    const numbers = (text.match(/\d+/g) ?? []).map(Number);
+    if (numbers.length === 0) return void 0;
+    const [retold, flagged] = numbers.length === 1 ? [0, numbers[0]] : numbers;
+    if (retold > count || flagged > count) return void 0;
+    return { retold, flagged: flagged > retold ? flagged : 0 };
   }
   function attempts(storyModel) {
     const base = { max_tokens: MAX_OUTPUT_TOKENS, temperature: 0 };
     const list = [
       ...working ? [working] : [],
-      { model: storyModel, params: { ...base, enable_thinking: false } },
+      // GLM 4.6 first: while a reply is being written, NovelAI can refuse a second generation with the
+      // story's own model ("Error 429: Concurrent generation is locked", seen with Xialong).
       { model: "glm-4-6", params: { ...base, enable_thinking: false } },
+      { model: storyModel, params: { ...base, enable_thinking: false } },
       { model: storyModel, params: base }
     ];
     const seen = /* @__PURE__ */ new Set();
@@ -312,9 +348,9 @@ memoryLimit: 8
         }
         working = attempt;
         const raw = outcome.text ?? "";
-        const answer = parseRefereeAnswer(raw, input.sentences.length);
+        const parsed = parseRefereeAnswer(raw, input.sentences.length);
         const failedFirst = errors.length ? errors.join("; ") : void 0;
-        return answer === void 0 ? { raw, ms: elapsed(), model: attempt.model, failedFirst, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer, raw, ms: elapsed(), model: attempt.model, failedFirst };
+        return parsed === void 0 ? { raw, ms: elapsed(), model: attempt.model, failedFirst, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer: parsed.flagged, retold: parsed.retold, raw, ms: elapsed(), model: attempt.model, failedFirst };
       }
       return { raw: "", ms: elapsed(), error: errors.join("; ") };
     } finally {
@@ -364,12 +400,13 @@ memoryLimit: 8
   function narratorRules(strict) {
     return [
       "Narrate what happens as a direct result of this, then stop. Rules:",
-      "1. Write only the world's response: what the other characters and any companions say and do, and what the player character sees and hears.",
-      strict ? "2. Never write anything the player character says, thinks, feels, decides or does beyond what the player wrote, not even physical reactions." : "2. Never write the player character's speech, thoughts, decisions or deliberate actions beyond what the player wrote. Involuntary physical reactions, like a flinch or a racing heart, are fine.",
-      "3. Stop at the first moment the player character could speak, act or decide. When someone asks them something or waits for their answer, end the reply there. Never continue a conversation on their behalf, and never have anyone react to an answer they haven't given.",
-      "4. Stay in this scene: no scene breaks, headings or chapter titles, and no skipping ahead in time.",
-      "5. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.",
-      "6. Keep it short: one to three short paragraphs."
+      "1. Begin with how the world responds. Do not repeat or retell what the player wrote; it is already in the story.",
+      "2. Write only the world's response: what the other characters and any companions say and do, and what the player character sees and hears.",
+      strict ? "3. Never write anything the player character says, thinks, feels, decides or does beyond what the player wrote, not even physical reactions." : "3. Never write the player character's speech, thoughts, decisions or deliberate actions beyond what the player wrote. Involuntary physical reactions, like a flinch or a racing heart, are fine.",
+      "4. Stop at the first moment the player character could speak, act or decide. When someone asks them something or waits for their answer, end the reply there. Never continue a conversation on their behalf, and never have anyone react to an answer they haven't given.",
+      "5. Stay in this scene: no scene breaks, headings or chapter titles, and no skipping ahead in time.",
+      "6. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.",
+      "7. Keep it short: one to three short paragraphs."
     ].join("\n");
   }
   function addedText(strict) {
@@ -478,13 +515,17 @@ ${second}` : second;
   }
   async function decide(turn, reply) {
     const sentences = splitSentences(reply);
-    let lead = 0;
-    while (lead < sentences.length && isSceneMarker(sentences[lead].text)) lead++;
-    const body = sentences.slice(lead);
+    let markers = 0;
+    while (markers < sentences.length && isSceneMarker(sentences[markers].text)) markers++;
+    let lead = markers + findRetelling(reply, sentences.slice(markers), turn.playerInput);
     const options = { strict: turn.strict, playerInput: turn.playerInput };
-    const byRules = (overstep) => overstep ? { ...overstep, index: overstep.index + lead, by: "rules" } : void 0;
-    let cut = byRules(findOverstep(reply, body, { ...options, actions: !turn.referee }));
+    const rulesFrom = (from, actions) => {
+      const overstep = findOverstep(reply, sentences.slice(from), { ...options, actions });
+      return overstep ? { ...overstep, index: overstep.index + from, by: "rules" } : void 0;
+    };
+    let cut = rulesFrom(lead, !turn.referee);
     let referee;
+    const refereeFrom = lead;
     const checkUpTo = cut ? cut.index : sentences.length;
     if (turn.referee && checkUpTo > lead) {
       referee = await askReferee(turn.model, {
@@ -493,10 +534,11 @@ ${second}` : second;
         sentences: sentences.slice(lead, checkUpTo).map((s) => s.text),
         strict: turn.strict
       });
+      lead += referee.retold ?? 0;
       if (referee.answer) {
-        cut = { index: lead + referee.answer - 1, reason: "writes for your character", by: "referee" };
+        cut = { index: refereeFrom + referee.answer - 1, reason: "writes for your character", by: "referee" };
       } else if (referee.error) {
-        const fallback = byRules(findOverstep(reply, body, { ...options, actions: true }));
+        const fallback = rulesFrom(lead, true);
         if (fallback && (!cut || fallback.index < cut.index)) cut = fallback;
       }
     }
@@ -505,12 +547,23 @@ ${second}` : second;
     let keep = cut ? sentences[cut.index].start : reply.length;
     let unfinishedTrimmed = false;
     const last = sentences[sentences.length - 1];
-    if (!cut && body.length > 1 && !isComplete(last.text)) {
+    if (!cut && sentences.length - lead > 1 && !isComplete(last.text)) {
       keep = last.start;
       unfinishedTrimmed = true;
     }
     while (keep > keepFrom && /\s/.test(reply[keep - 1])) keep--;
-    return { reply, sentences, lead, keepFrom, keep: Math.max(keep, keepFrom), cut, unfinishedTrimmed, referee };
+    return {
+      reply,
+      sentences,
+      markers,
+      lead,
+      refereeFrom,
+      keepFrom,
+      keep: Math.max(keep, keepFrom),
+      cut,
+      unfinishedTrimmed,
+      referee
+    };
   }
   function keptNothing(decision) {
     return decision.reply.trim() !== "" && decision.reply.slice(decision.keepFrom, decision.keep).trim() === "";
@@ -533,8 +586,9 @@ ${second}` : second;
   }
   function statusText(d, turn) {
     if (!d.reply.trim()) return "Last turn: the AI wrote nothing.";
-    const total = d.sentences.length - d.lead;
+    const total = d.sentences.length - d.markers;
     const kept = d.sentences.filter((s, i) => i >= d.lead && s.start < d.keep).length;
+    const retold = d.lead - d.markers;
     const lines = [];
     if (d.cut) {
       const sentence = quote(d.sentences[d.cut.index].text.trim(), 120);
@@ -552,11 +606,18 @@ ${second}` : second;
     } else {
       lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? "" : "s"}).`);
     }
-    if (d.lead > 0 && total > 0) lines.push("Removed a scene break or heading from the start.");
+    if (d.markers > 0 && total > 0) lines.push("Removed a scene break or heading from the start.");
+    if (retold > 0) {
+      lines.push(`Removed ${retold === 1 ? "the opening sentence" : `${retold} opening sentences`}, which retold your own action.`);
+    }
     if (d.referee) {
-      const seconds = `${(d.referee.ms / 1e3).toFixed(1)} s`;
+      const r = d.referee;
+      const findings = [
+        r.retold ? `retelling up to sentence ${d.refereeFrom + r.retold}` : "",
+        r.answer ? `flagged sentence ${d.refereeFrom + r.answer}` : ""
+      ].filter(Boolean);
       lines.push(
-        d.referee.error ? `Referee: unavailable (${d.referee.error}), so the pattern rules checked for actions too.` : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : "no problems"} (${d.referee.model}, ${seconds}).`
+        r.error ? `Referee: unavailable (${r.error}), so the pattern rules checked for actions too.` : `Referee: ${findings.join(", ") || "no problems"} (${r.model}, ${(r.ms / 1e3).toFixed(1)} s).`
       );
     }
     return lines.join("\n");

@@ -15,6 +15,8 @@ export type RefereeInput = {
 export type RefereeResult = {
   /** 1-based number of the first offending sentence, or 0 if none. Missing if there was no usable answer. */
   answer?: number
+  /** How many opening sentences retell the player's own action in a way that breaks the rule (to remove). */
+  retold?: number
   raw: string
   ms: number
   /** The model that answered. */
@@ -55,7 +57,7 @@ export function refereePrompt({ storyTail, playerInput, sentences, strict }: Ref
     'The narrator replied with these sentences:',
     ...sentences.map((s, i) => `${i + 1}. ${s.trim()}`),
     '',
-    'Which is the first sentence where the narrator writes for the player character? That means any of:',
+    'The narrator writes for the player character when a sentence contains any of:',
     '- the player character speaking, including quoted lines that are the player character\'s words even when no speaker is named',
     '- the player character\'s thoughts, questions to themselves, conclusions or plans',
     '- the player character deciding something, or doing something deliberate that the player did not type',
@@ -63,7 +65,13 @@ export function refereePrompt({ storyTail, playerInput, sentences, strict }: Ref
     '- asking the player what they do, offering them choices, or speaking to the player directly',
     allowed,
     '',
-    'Only flag a sentence that clearly breaks the rule. Answer with the sentence number only, or 0 if no sentence breaks the rule.',
+    'Replies sometimes open by retelling the player\'s own action, for example the player character saying the line the player typed, with thoughts or feelings added. If such an opening breaks the rule, it will be removed and the rest of the reply can still be used.',
+    '',
+    'Answer with two numbers separated by a space, and nothing else:',
+    '- first: if the reply opens with a retelling of the player\'s action that breaks the rule, the number of the sentence where that opening ends; otherwise 0',
+    '- second: the first sentence after that opening where the narrator writes for the player character; otherwise 0',
+    'For example, "0 0" means every sentence is fine, "0 4" means sentence 4 is the first problem, "2 0" means sentences 1 and 2 retell the player\'s action in a way that breaks the rule and the rest is fine, and "2 5" means the same with sentence 5 as the next problem.',
+    'Only flag a sentence that clearly breaks the rule.',
   ].join('\n')
   return [
     {
@@ -76,25 +84,33 @@ export function refereePrompt({ storyTail, playerInput, sentences, strict }: Ref
 }
 
 /** Reads the referee's answer: a sentence number from 1 to `count`, 0 for none, or undefined. */
-export function parseRefereeAnswer(raw: string, count: number): number | undefined {
+/**
+ * Reads the referee's answer: where an opening retelling ends (0 for none) and the first offending
+ * sentence after it (0 for none), each from 1 to `count`. A single number is the offending sentence.
+ */
+export function parseRefereeAnswer(raw: string, count: number): { retold: number; flagged: number } | undefined {
   const text = raw.trim().toLowerCase()
-  if (/^(?:none|no\b)/.test(text)) return 0
-  const match = /\d+/.exec(text)
-  if (!match) return undefined
-  const answer = Number(match[0])
-  return answer <= count ? answer : undefined
+  if (/^(?:none|no\b)/.test(text)) return { retold: 0, flagged: 0 }
+  const numbers = (text.match(/\d+/g) ?? []).map(Number)
+  if (numbers.length === 0) return undefined
+  const [retold, flagged] = numbers.length === 1 ? [0, numbers[0]] : numbers
+  if (retold > count || flagged > count) return undefined
+  // A flagged sentence inside the retelling goes anyway, with the retelling.
+  return { retold, flagged: flagged > retold ? flagged : 0 }
 }
 
 /**
- * Script generation officially supports GLM 4.6, so after the story's own model the referee tries
- * GLM 4.6, then the story's model without the thinking switch. Whatever works is remembered.
+ * The referee tries GLM 4.6 (which script generation officially supports), then the story's own
+ * model, then that model without the thinking switch. Whatever works is remembered.
  */
 function attempts(storyModel: string): Attempt[] {
   const base = { max_tokens: MAX_OUTPUT_TOKENS, temperature: 0 }
   const list: Attempt[] = [
     ...(working ? [working] : []),
-    { model: storyModel, params: { ...base, enable_thinking: false } },
+    // GLM 4.6 first: while a reply is being written, NovelAI can refuse a second generation with the
+    // story's own model ("Error 429: Concurrent generation is locked", seen with Xialong).
     { model: 'glm-4-6', params: { ...base, enable_thinking: false } },
+    { model: storyModel, params: { ...base, enable_thinking: false } },
     { model: storyModel, params: base },
   ]
   const seen = new Set<string>()
@@ -130,11 +146,11 @@ export async function askReferee(storyModel: string, input: RefereeInput): Promi
       }
       working = attempt
       const raw = outcome.text ?? ''
-      const answer = parseRefereeAnswer(raw, input.sentences.length)
+      const parsed = parseRefereeAnswer(raw, input.sentences.length)
       const failedFirst = errors.length ? errors.join('; ') : undefined
-      return answer === undefined
+      return parsed === undefined
         ? { raw, ms: elapsed(), model: attempt.model, failedFirst, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` }
-        : { answer, raw, ms: elapsed(), model: attempt.model, failedFirst }
+        : { answer: parsed.flagged, retold: parsed.retold, raw, ms: elapsed(), model: attempt.model, failedFirst }
     }
     return { raw: '', ms: elapsed(), error: errors.join('; ') }
   } finally {

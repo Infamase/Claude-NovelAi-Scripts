@@ -7,7 +7,7 @@
 // them back changes nothing on screen.
 
 import { KEYS, logError } from '../keys.ts'
-import { findOverstep, type Overstep } from './detector.ts'
+import { findOverstep, findRetelling, type Overstep } from './detector.ts'
 import { askReferee, isRefereeRunning, type RefereeInput, type RefereeResult } from './referee.ts'
 import { addedText, turnContext, withRules } from './rules.ts'
 import { isComplete, isSceneMarker, sliceChunks, splitSentences, type Sentence } from './text.ts'
@@ -29,7 +29,11 @@ export type Decision = {
   reply: string
   sentences: Sentence[]
   /** How many scene breaks or headings were dropped from the start of the reply. */
+  markers: number
+  /** How many sentences were dropped from the start in all: scene markers, then any retelling of the player's action. */
   lead: number
+  /** Index of the first sentence the referee saw; its sentence numbers count from there. */
+  refereeFrom: number
   /** The part of the reply that reaches the editor: characters keepFrom to keep. */
   keepFrom: number
   keep: number
@@ -98,18 +102,21 @@ export function registerTurnGuard(): void {
 /** Decides how much of a finished reply to keep. */
 export async function decide(turn: Turn, reply: string): Promise<Decision> {
   const sentences = splitSentences(reply)
-  // Scene breaks and headings at the very start are dropped; the reply proper begins after them.
-  // Anywhere later they mean the AI is moving on to a new scene, so the rules cut there.
-  let lead = 0
-  while (lead < sentences.length && isSceneMarker(sentences[lead].text)) lead++
-  const body = sentences.slice(lead)
+  // Dropped from the start: scene breaks and headings, then any retelling of the player's own line,
+  // which is already in the story. Anywhere later, scene markers make the rules cut the reply.
+  let markers = 0
+  while (markers < sentences.length && isSceneMarker(sentences[markers].text)) markers++
+  let lead = markers + findRetelling(reply, sentences.slice(markers), turn.playerInput)
   const options = { strict: turn.strict, playerInput: turn.playerInput }
-  const byRules = (overstep: Overstep | undefined) =>
-    overstep ? { ...overstep, index: overstep.index + lead, by: 'rules' as const } : undefined
+  const rulesFrom = (from: number, actions: boolean): Decision['cut'] => {
+    const overstep = findOverstep(reply, sentences.slice(from), { ...options, actions })
+    return overstep ? { ...overstep, index: overstep.index + from, by: 'rules' } : undefined
+  }
 
   // With the referee on, it judges actions; the rules still catch the clear-cut cases.
-  let cut: Decision['cut'] = byRules(findOverstep(reply, body, { ...options, actions: !turn.referee }))
+  let cut = rulesFrom(lead, !turn.referee)
   let referee: RefereeResult | undefined
+  const refereeFrom = lead
   const checkUpTo = cut ? cut.index : sentences.length
   if (turn.referee && checkUpTo > lead) {
     referee = await askReferee(turn.model, {
@@ -118,11 +125,13 @@ export async function decide(turn: Turn, reply: string): Promise<Decision> {
       sentences: sentences.slice(lead, checkUpTo).map((s) => s.text),
       strict: turn.strict,
     })
+    // An opening that retells the player's action badly is dropped; the rest can still be used.
+    lead += referee.retold ?? 0
     if (referee.answer) {
-      cut = { index: lead + referee.answer - 1, reason: 'writes for your character', by: 'referee' }
+      cut = { index: refereeFrom + referee.answer - 1, reason: 'writes for your character', by: 'referee' }
     } else if (referee.error) {
       // Without the referee's verdict, let the rules judge actions too.
-      const fallback = byRules(findOverstep(reply, body, { ...options, actions: true }))
+      const fallback = rulesFrom(lead, true)
       if (fallback && (!cut || fallback.index < cut.index)) cut = fallback
     }
   }
@@ -132,13 +141,24 @@ export async function decide(turn: Turn, reply: string): Promise<Decision> {
   let keep = cut ? sentences[cut.index].start : reply.length
   let unfinishedTrimmed = false
   const last = sentences[sentences.length - 1]
-  if (!cut && body.length > 1 && !isComplete(last.text)) {
+  if (!cut && sentences.length - lead > 1 && !isComplete(last.text)) {
     // The length limit cut the reply off mid-sentence.
     keep = last.start
     unfinishedTrimmed = true
   }
   while (keep > keepFrom && /\s/.test(reply[keep - 1])) keep--
-  return { reply, sentences, lead, keepFrom, keep: Math.max(keep, keepFrom), cut, unfinishedTrimmed, referee }
+  return {
+    reply,
+    sentences,
+    markers,
+    lead,
+    refereeFrom,
+    keepFrom,
+    keep: Math.max(keep, keepFrom),
+    cut,
+    unfinishedTrimmed,
+    referee,
+  }
 }
 
 function keptNothing(decision: Decision): boolean {
@@ -164,8 +184,9 @@ async function report(turn: Turn, decision: Decision): Promise<void> {
 
 export function statusText(d: Decision, turn?: Pick<Turn, 'retryNumber'>): string {
   if (!d.reply.trim()) return 'Last turn: the AI wrote nothing.'
-  const total = d.sentences.length - d.lead
+  const total = d.sentences.length - d.markers
   const kept = d.sentences.filter((s, i) => i >= d.lead && s.start < d.keep).length
+  const retold = d.lead - d.markers
   const lines: string[] = []
   if (d.cut) {
     const sentence = quote(d.sentences[d.cut.index].text.trim(), 120)
@@ -185,13 +206,21 @@ export function statusText(d: Decision, turn?: Pick<Turn, 'retryNumber'>): strin
   } else {
     lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? '' : 's'}).`)
   }
-  if (d.lead > 0 && total > 0) lines.push('Removed a scene break or heading from the start.')
+  if (d.markers > 0 && total > 0) lines.push('Removed a scene break or heading from the start.')
+  if (retold > 0) {
+    lines.push(`Removed ${retold === 1 ? 'the opening sentence' : `${retold} opening sentences`}, which retold your own action.`)
+  }
   if (d.referee) {
-    const seconds = `${(d.referee.ms / 1000).toFixed(1)} s`
+    // The referee numbers the sentences it saw; these are shown counted from the start of the reply.
+    const r = d.referee
+    const findings = [
+      r.retold ? `retelling up to sentence ${d.refereeFrom + r.retold}` : '',
+      r.answer ? `flagged sentence ${d.refereeFrom + r.answer}` : '',
+    ].filter(Boolean)
     lines.push(
-      d.referee.error
-        ? `Referee: unavailable (${d.referee.error}), so the pattern rules checked for actions too.`
-        : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : 'no problems'} (${d.referee.model}, ${seconds}).`,
+      r.error
+        ? `Referee: unavailable (${r.error}), so the pattern rules checked for actions too.`
+        : `Referee: ${findings.join(', ') || 'no problems'} (${r.model}, ${(r.ms / 1000).toFixed(1)} s).`,
     )
   }
   return lines.join('\n')

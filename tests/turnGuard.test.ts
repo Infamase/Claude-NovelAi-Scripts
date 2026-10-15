@@ -66,7 +66,7 @@ describe('turn guard', () => {
     const kept = await turn(mock, 'You drink the ale.', 'The ale is warm. The bartender grins. "Thanks," you say. He nods.')
     assert.equal(kept, 'The ale is warm. The bartender grins.')
     assert.match(status(mock), /kept 2 of 4 sentences\. Cut from: "\\"Thanks,\\" you say\."\nWhy: your character speaks \(found by the pattern rules\)/)
-    assert.match(refereePromptOf(mock), /\n1\. The ale is warm\.\n2\. The bartender grins\.\n\nWhich/)
+    assert.match(refereePromptOf(mock), /\n1\. The ale is warm\.\n2\. The bartender grins\.\n\nThe narrator writes/)
   })
 
   it('cuts "What do you do?"', async () => {
@@ -136,6 +136,40 @@ describe('turn guard', () => {
     assert.equal(await turn(mock, 'You wait.', '***\n[ Chapter 2 ]'), '')
     assert.match(status(mock), /nothing was kept\. The reply was only scene breaks or headings/)
     assert.equal(mock.refereeCalls.length, 0)
+  })
+
+  it('drops an opening that retells your line and keeps the response after it', async () => {
+    // The reply from the fifth playtest, shortened.
+    const reply = [
+      'The last word vibrates in your bones.',
+      'You\'re not sure why you do, but your voice finds itself, shaking and barely more than a whisper.',
+      '"H-Hunter."',
+      'Silence stretches for a long moment. The dragon blinks once, then lowers her head closer. "Is that all?"',
+      'Your heart hammers. You can barely breathe, let alone speak. But something about her, about this moment, cuts through the fog in your mind. You try to form the words.',
+    ].join('\n')
+    // A referee that flags the thought: the sentence about the fog, in the numbering it was given.
+    const mock = await setup({
+      referee: (messages) => {
+        const line = (messages[1].content ?? '').split('\n').find((l) => l.includes('cuts through the fog'))
+        return `0 ${line?.split('.')[0] ?? 0}`
+      },
+    })
+    const kept = await turn(mock, 'You restate "H-Hunter."', reply)
+    assert.equal(
+      kept,
+      'Silence stretches for a long moment. The dragon blinks once, then lowers her head closer. "Is that all?"\nYour heart hammers. You can barely breathe, let alone speak.',
+    )
+    assert.match(status(mock), /Removed 3 opening sentences, which retold your own action\./)
+    // The referee never saw the retelling, and its finding is shown in the full numbering.
+    assert.doesNotMatch(refereePromptOf(mock), /\d\. "H-Hunter\."/)
+    assert.match(status(mock), /Referee: flagged sentence 9 /)
+  })
+
+  it('drops an opening retelling the referee points out, and keeps the rest', async () => {
+    const mock = await setup({ referee: () => '1 0' })
+    const kept = await turn(mock, 'You touch the dragon.', 'You reach out, wondering if this is wise, and touch her scales. They are warm. She goes still.')
+    assert.equal(kept, 'They are warm. She goes still.')
+    assert.match(status(mock), /Removed the opening sentence, which retold your own action\.\nReferee: retelling up to sentence 1 /)
   })
 
   it('falls back to GLM 4.6 for the referee when the story model fails', async () => {

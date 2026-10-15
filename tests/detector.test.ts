@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { findOverstep, type DetectOptions } from '../src/guard/detector.ts'
+import { findOverstep, findRetelling, type DetectOptions } from '../src/guard/detector.ts'
 import { splitSentences } from '../src/guard/text.ts'
 
 const REACTIONS: DetectOptions = { strict: false, actions: true }
@@ -100,5 +100,34 @@ describe('findOverstep', () => {
     // From the stop tests: both write for the player, but patterns can't tell.
     assert.equal(cutAt('Her? The dragon is... a woman?'), null)
     assert.equal(cutAt('"First... guest?"\nShe doesn\'t reply right away.'), null)
+  })
+})
+
+describe('findRetelling', () => {
+  const retold = (reply: string, input: string) => findRetelling(reply, splitSentences(reply), input)
+
+  it('finds an opening that repeats your typed line as your words', () => {
+    // From the fifth playtest.
+    const reply =
+      'The last word vibrates in your bones. You\'re not sure why you do, but your voice finds itself, shaking and barely more than a whisper. "H-Hunter." Silence stretches for a long moment. The dragon blinks once.'
+    assert.equal(retold(reply, 'You restate "H-Hunter."'), 3)
+  })
+
+  it('counts a bare repeat at the very start, or one tagged with "you"', () => {
+    assert.equal(retold('"Hello." The dragon tilts her head.', 'You say "Hello."'), 1)
+    assert.equal(retold('"Who are you," you ask again. She laughs.', 'You ask "Who are you?"'), 1)
+  })
+
+  it('leaves another character repeating your words alone', () => {
+    assert.equal(retold('"Hunter," she repeats, tasting the name. Her eyes narrow.', 'You say "Hunter."'), 0)
+    // From the third playtest: her quote is split across sentences, so its first half stands alone.
+    assert.equal(retold('"Speak with? Yes, with," she says, studying you.', 'You ask "Speak with?"'), 0)
+    assert.equal(retold('She studies you. "Hunter." Her eyes narrow.', 'You say "Hunter."'), 0)
+  })
+
+  it('ignores inputs without speech, short lines and repeats further in', () => {
+    assert.equal(retold('You touch her scales. They are warm.', 'You touch the dragon.'), 0)
+    assert.equal(retold('"No." She laughs.', 'You say "No."'), 0)
+    assert.equal(retold('One. Two. Three. Four. "Hello there," you say.', 'You say "Hello there."'), 0)
   })
 })

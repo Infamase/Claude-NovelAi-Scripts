@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 1 (v0.2.4)**: the turn guard, tuning from playtests.
+Status: **Phase 1 (v0.2.5)**: the turn guard, tuning from playtests.
 
 ---
 
@@ -42,6 +42,7 @@ This is the core feature. A script can't give the model a "dynamic length", and 
 
 ### Layer 1 — Instruct (prevention)
 Before every reply the script marks your latest input in the context as **the player's action** and follows it with numbered **narration rules** (`onContextBuilt`). It also adds one line to the system prompt: this is a text adventure, the user plays "you", and the reply must never write for them. The rules tell the AI to:
+- begin with how the world responds, without repeating or retelling what you wrote;
 - write only what happens because of your input: how the world, the other characters and companions respond, and what your character sees and hears;
 - never write your character's speech, thoughts, conclusions, decisions or deliberate actions beyond what you typed (involuntary physical reactions are fine, except in strict mode);
 - stop as soon as your character would need to speak, act or decide, and end the reply when someone asks your character something or waits for an answer; never continue a conversation on your behalf, and never have anyone react to an answer you haven't given;
@@ -68,6 +69,7 @@ The script holds every streamed chunk back (`seenData: 0`) and decides on the fi
 | Unattributed speech, unmarked thoughts | `"First... guest?"`, `Her? The dragon is... a woman?` | referee |
 | Deliberate actions you didn't type | `You nod and slide your mug over.` | referee (the rules, when it's off or unavailable) |
 | Skipped turns: someone reacting to an answer you never gave | `"So you were lost. Convenient."` | referee |
+| An opening that retells your own line or action | `…your voice finds itself, shaking… "H-Hunter."` | rules (a repeat of your typed line) and referee: **removed**, and the rest is still used |
 | Physical reactions | `You cough.`, `You flinch.` | allowed; cut in strict mode |
 
 Carrying out what you typed is allowed: after "You approach the dragon", the line "As you approach, she lifts her head" stays.
@@ -187,6 +189,7 @@ dist/text-adventure-plus.naiscript   ← the file you import
 - **Second playtest (v0.2.1), with the rewritten intro:** the referee works inside a reply (Xialong, 0.5 s). The AI kept to the dragon's side and wrote no lines for the player. The referee flagged an allowed reaction ("Your mouth goes dry.") with Strict off, so v0.2.2 spells out allowed sensations and reactions with examples and asks it to flag only clear breaks.
 - **Third playtest (v0.2.2):** a good reply up to "The dragon waits.", but it began with a stray `***`, and after that line the AI started a new "chapter" (`***`, `[ Dragonfire and Doubts ]`) before writing for the player. Both markers were kept because the cut came after them. v0.2.3 removes scene breaks and headings at the start of a reply, cuts at any later one, and adds a "stay in this scene" rule. The referee also fell back to GLM 4.6 once; details now show which attempt failed first.
 - **Fourth playtest (v0.2.3):** a clean turn, cut at a `- - -` scene break. After the break the dragon answered a reply the player never gave ("So you were lost. Convenient."), so the cut was right, but only because the scene break came first. v0.2.4 tells the AI to end the reply when someone waits for the player's answer, and the referee now flags anyone reacting to an answer that was never given.
+- **Fifth playtest (v0.2.4):** the reply opened by retelling the player's typed line with an added thought ("You're not sure why you do, but your voice finds itself… \"H-Hunter.\""). The referee cut there, losing the dragon's whole response. v0.2.5 removes such an opening instead (a pattern check for repeats of the typed line, and a second number in the referee's answer) and keeps checking the rest; the rules now say to begin with the world's response. The referee's story-model call failed with "Error 429: Concurrent generation is locked" (a second Xialong generation during the reply), so the referee now tries GLM 4.6 first.
 
 ## 11. Risks
 

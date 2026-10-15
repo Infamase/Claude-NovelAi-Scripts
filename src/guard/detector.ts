@@ -4,7 +4,7 @@
 // but the narrator may not. Who is speaking an unattributed quote, or whose thought an unmarked line
 // is, can't be told from patterns; the referee handles those.
 
-import { isSceneMarker, quoteMask, type Sentence } from './text.ts'
+import { isSceneMarker, quoteMask, splitSentences, type Sentence } from './text.ts'
 
 export type Overstep = { index: number; reason: string }
 
@@ -74,12 +74,60 @@ export function findOverstep(text: string, sentences: Sentence[], options: Detec
   const typed = new Set(words(options.playerInput ?? '').map(stem))
   for (let index = 0; index < sentences.length; index++) {
     const sentence = sentences[index]
-    let narration = ''
-    for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? ' ' : text[i]
-    const reason = checkSentence(sentence.text.trim(), narration.trim(), typed, options)
+    const reason = checkSentence(sentence.text.trim(), narrationOf(text, mask, sentence).trim(), typed, options)
     if (reason) return { index, reason }
   }
   return undefined
+}
+
+/** How many of the first sentences can repeat the player's line and still count as a retelling. */
+const RETELLING_WINDOW = 4
+
+/**
+ * How many sentences at the start retell the player's own quoted line: up to and including the last
+ * one, among the first few, that repeats it as the player character's words. The line is already in
+ * the story as the player's input, so the retelling is redundant and can be dropped.
+ *
+ * From playtesting: `You restate "H-Hunter."` got the reply `The last word vibrates in your bones.
+ * You're not sure why you do, but your voice finds itself, shaking… "H-Hunter."` before the dragon
+ * answered. Repeating it as someone else's words (`"Hunter," she repeats.`) doesn't count.
+ */
+export function findRetelling(text: string, sentences: Sentence[], playerInput?: string): number {
+  const lines = typedLines(playerInput)
+  if (lines.length === 0) return 0
+  const mask = quoteMask(text)
+  let end = 0
+  for (let i = 0; i < Math.min(sentences.length, RETELLING_WINDOW); i++) {
+    const squashed = squash(sentences[i].text)
+    if (!lines.some((line) => squashed.includes(line))) continue
+    const own = narrationOf(text, mask, sentences[i]).trim()
+    const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]) : ''
+    // The player's words if tagged as their speech ("you ask"), or if the line stands alone, complete,
+    // at the start or right after narration about the player character ("your voice finds itself").
+    const standalone = own === '' && /^["“][^"”]*["”]$/.test(sentences[i].text.trim())
+    if (SPEECH.test(own) || (standalone && (i === 0 || YOU_AS_SUBJECT.test(before)))) end = i + 1
+  }
+  return end
+}
+
+/** "You" or "your <something>" starting a clause, as in "but your voice finds itself". */
+const YOU_AS_SUBJECT = /(?:^|[.;:,!?—–]\s*|\b(?:and|but|then|so|as|while|when)\s+)(?:you|your\s+\w+)\b/i
+
+/** The lines of speech the player typed, one sentence at a time, squashed for comparison. */
+function typedLines(input?: string): string[] {
+  const quotes = [...(input ?? '').matchAll(/["“]([^"”]+)["”]/g)].map((m) => m[1])
+  return quotes.flatMap((quote) => splitSentences(quote).map((s) => squash(s.text))).filter((line) => line.length >= 4)
+}
+
+function squash(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '')
+}
+
+/** A sentence with its quoted speech blanked out, leaving only the narration. */
+function narrationOf(text: string, mask: boolean[], sentence: Sentence): string {
+  let narration = ''
+  for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? ' ' : text[i]
+  return narration
 }
 
 function checkSentence(raw: string, narration: string, typed: Set<string>, options: DetectOptions): string | undefined {

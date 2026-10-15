@@ -45,6 +45,7 @@ describe('narratorRules', () => {
     assert.match(rules, /never have anyone react to an answer they haven't given/)
     assert.match(rules, /never on a question to the player: do not ask what they do/)
     assert.match(rules, /Keep it short/)
+    assert.match(rules, /^1\. Begin with how the world responds\. Do not repeat or retell what the player wrote/m)
     assert.match(rules, /Stay in this scene: no scene breaks, headings or chapter titles/)
     assert.match(rules, /Involuntary physical reactions, like a flinch or a racing heart, are fine/)
     assert.match(narratorRules(true), /not even physical reactions/)
@@ -79,17 +80,25 @@ describe('referee', () => {
     assert.match(user.content ?? '', /never a reason to flag a sentence: .*such as a dry mouth, a racing heart/)
     assert.match(user.content ?? '', /Only flag a sentence that clearly breaks the rule/)
     assert.match(user.content ?? '', /another character reacting to an answer or action from the player character that never happened/)
+    assert.match(user.content ?? '', /Answer with two numbers separated by a space/)
+    assert.match(user.content ?? '', /If such an opening breaks the rule, it will be removed/)
     const [, strictUser] = refereePrompt({ sentences: ['x'], strict: true })
     assert.match(strictUser.content ?? '', /not even physical reactions or sensations/)
     assert.doesNotMatch(strictUser.content ?? '', /dry mouth/)
   })
 
   it('reads its answer', () => {
-    assert.equal(parseRefereeAnswer('2', 5), 2)
-    assert.equal(parseRefereeAnswer(' 0\n', 5), 0)
-    assert.equal(parseRefereeAnswer('Sentence 3.', 5), 3)
-    assert.equal(parseRefereeAnswer('None', 5), 0)
+    // Two numbers: where an opening retelling ends, then the first problem after it.
+    assert.deepEqual(parseRefereeAnswer('0 0', 5), { retold: 0, flagged: 0 })
+    assert.deepEqual(parseRefereeAnswer('3 5', 5), { retold: 3, flagged: 5 })
+    assert.deepEqual(parseRefereeAnswer(' 2 0\n', 5), { retold: 2, flagged: 0 })
+    assert.deepEqual(parseRefereeAnswer('3 2', 5), { retold: 3, flagged: 0 }, 'a flag inside the retelling goes with it')
+    // A single number is the first problem.
+    assert.deepEqual(parseRefereeAnswer('2', 5), { retold: 0, flagged: 2 })
+    assert.deepEqual(parseRefereeAnswer('Sentence 3.', 5), { retold: 0, flagged: 3 })
+    assert.deepEqual(parseRefereeAnswer('None', 5), { retold: 0, flagged: 0 })
     assert.equal(parseRefereeAnswer('7', 5), undefined)
+    assert.equal(parseRefereeAnswer('0 9', 5), undefined)
     assert.equal(parseRefereeAnswer('', 5), undefined)
   })
 
