@@ -1,43 +1,62 @@
 // Phase 0 stop test: learns how NovelAI handles a script cutting a streamed generation short.
 //
-// The user arms the test from the sidebar and it runs on the next generation in this story. The
-// script holds text back until the first sentence is complete, lets that sentence through with
-// `seenData`, then sends the second sentence together with `stopGeneration`. Afterwards it checks
-// what actually reached the editor, and records how the TA input and the context looked.
+// Once armed from the sidebar it runs over the user's next three turns, one cutting technique per
+// turn. Each turn holds text back until the first sentence is complete and releases it with
+// `seenData`, then cuts after the second sentence using that turn's technique. After the generation
+// it checks what actually reached the editor, and records how the TA input and the context looked.
 
 import { chunksCovering, findSentenceEnd, truncateChunks } from '../guard/text.ts'
 import { KEYS, logError } from '../keys.ts'
 
+type Technique = { id: 'stop-with-text' | 'release-then-stop' | 'hide-rest'; label: string }
+
+const TECHNIQUES: Technique[] = [
+  { id: 'stop-with-text', label: 'Cut and stop in one step' },
+  { id: 'release-then-stop', label: 'Let the text through, then stop on the next call' },
+  { id: 'hide-rest', label: 'Hide everything after the cut, without stopping' },
+]
+
 type TaInput = { continuityId: string; mode: string; inputText: string; rawInputText: string }
 
 type Run = {
+  technique: Technique
+  step: number
   continuityId: string
-  startedAt: string
   model: string
-  scriptInitiated: boolean
   maxTokens?: number
   taInput?: TaInput
   context?: string[]
+  nodeBefore?: number
+  nodeAfter?: number
+  latestGenerationNode?: number
   responseCalls: number
   heldCalls: number
+  /** First sentence, let through with seenData. */
   released: string
-  cutText?: string
+  /** Everything that should end up in the editor: the first two sentences. Set at the cut. */
+  wanted?: string
+  cutCall?: number
   cutOnFinal?: boolean
-  callsAfterStop: number
+  afterCutCalls: number
+  afterCutChars: number
+  afterCutResent: boolean
+  finalCall?: string
+  midStreamVisible?: boolean
   endedEarly: boolean
-  finalSeen: boolean
   generationEnded: boolean
+  checks: { label: string; verdict: string }[]
+  documentTail: string[]
+  concluded: boolean
 }
 
 const HELP = [
   'Checks how NovelAI reacts when the script cuts a response short. The result decides how Phase 1 is built.',
   '',
   '1. Tick the box below.',
-  '2. Take one normal turn with the Do/Say box. Pick an action that should get several sentences back.',
-  '3. The script lets the first sentence through, cuts the response after the second, and checks what reached the editor.',
-  '4. Press **Copy report** and paste the report to Claude.',
+  '2. Take **three** normal turns with the Do/Say box. Pick actions that should get several sentences back. Each turn tries a different way of cutting.',
+  '3. After the third turn, press **Copy report** and paste the report to Claude.',
   '',
-  'The turn will look cut short. That is expected; undo it afterwards if you like.',
+  'Turns will look cut short, or may lose their text entirely; that is part of what is being measured. Undo them afterwards if you like.',
 ].join('\n')
 
 let lastTaInput: TaInput | undefined
@@ -52,23 +71,29 @@ export function registerDiagnosticsHooks(): void {
     lastTaInput = { continuityId, mode, inputText, rawInputText }
   })
 
-  api.v1.hooks.register('onGenerationRequested', async ({ continuityId, model, scriptInitiated }) => {
+  api.v1.hooks.register('onGenerationRequested', async ({ continuityId, model }) => {
     if ((await api.v1.storyStorage.get(KEYS.diagArmed)) !== true) return
+    const step = Math.min(Number(await api.v1.storyStorage.get(KEYS.diagStep)) || 0, TECHNIQUES.length - 1)
     const settings = await api.v1.generationParameters.get().catch(() => undefined)
     run = {
+      technique: TECHNIQUES[step],
+      step,
       continuityId,
-      startedAt: new Date().toISOString(),
       model,
-      scriptInitiated,
       maxTokens: settings?.max_tokens,
       taInput: lastTaInput,
+      nodeBefore: await api.v1.document.history.currentNodeId().catch(() => undefined),
       responseCalls: 0,
       heldCalls: 0,
       released: '',
-      callsAfterStop: 0,
+      afterCutCalls: 0,
+      afterCutChars: 0,
+      afterCutResent: false,
       endedEarly: false,
-      finalSeen: false,
       generationEnded: false,
+      checks: [],
+      documentTail: [],
+      concluded: false,
     }
   })
 
@@ -79,25 +104,31 @@ export function registerDiagnosticsHooks(): void {
   api.v1.hooks.register('onResponse', onResponse)
 
   api.v1.hooks.register('onGenerationEnd', async ({ continuityId }) => {
-    if (!run || run.continuityId !== continuityId) return
-    run.generationEnded = true
-    await finish(run)
+    const r = run
+    if (!r || r.continuityId !== continuityId || r.concluded) return
+    r.generationEnded = true
+    await check(r, 'At generation end')
+    // Look again shortly after, in case the editor changes once the generation has wound down.
+    later(r, 2000, '2 s later')
   })
 }
 
-const onResponse: OnResponse = ({ continuityId, text, final }) => {
+const onResponse: OnResponse = async ({ continuityId, text, final }) => {
   const r = run
-  if (!r || r.continuityId !== continuityId) return
+  if (!r || r.continuityId !== continuityId || r.concluded) return
   r.responseCalls++
-  if (final) r.finalSeen = true
-
-  if (r.cutText !== undefined) {
-    r.callsAfterStop++
-    return { text: text.map(() => ''), stopGeneration: true }
+  const joined = text.join('')
+  if (final) {
+    r.finalCall = `#${r.responseCalls}, ${text.length} chunks, ${joined.length} chars, starts ${quote(joined.slice(0, 60), 60)}`
   }
+
+  if (r.wanted !== undefined) return afterCut(r, text, joined)
   if (r.endedEarly) return
 
-  const joined = text.join('')
+  if (r.released && r.midStreamVisible === undefined) {
+    r.midStreamVisible = normalize((await readDocument()).text).includes(normalize(r.released))
+  }
+
   const end = findSentenceEnd(joined)
   if (end < 0 || (!r.released && final)) {
     // On the final call everything is placed regardless of seenData, so the test can't continue.
@@ -115,39 +146,70 @@ const onResponse: OnResponse = ({ continuityId, text, final }) => {
     return { seenData: count }
   }
 
-  r.cutText = joined.slice(0, end)
+  r.wanted = r.released + joined.slice(0, end)
+  r.cutCall = r.responseCalls
   r.cutOnFinal = final
-  // In case onGenerationEnd doesn't fire after a script stop, check the document anyway.
+  later(r, 4000, 'No onGenerationEnd; 4 s after the cut', true)
+  const kept = truncateChunks(text, end)
+  return r.technique.id === 'stop-with-text' ? { text: kept, stopGeneration: true } : { text: kept }
+}
+
+/** Handles calls that arrive after the cut point: their text must not reach the editor. */
+function afterCut(r: Run, text: string[], joined: string): OnResponseReturnValue {
+  const wanted = r.wanted ?? ''
+  r.afterCutCalls++
+  r.afterCutChars += joined.length
+  // If a call resends the whole response, trim it to the wanted text instead of blanking it all.
+  const resent = wanted !== '' && joined.startsWith(wanted)
+  if (resent) r.afterCutResent = true
+  const out = resent ? truncateChunks(text, wanted.length) : text.map(() => '')
+  return r.technique.id === 'hide-rest' ? { text: out } : { text: out, stopGeneration: true }
+}
+
+function later(r: Run, delay: number, label: string, onlyWithoutGenerationEnd = false): void {
   api.v1.timers
     .setTimeout(() => {
-      if (!r.generationEnded) finish(r).catch(logError)
-    }, 3000)
+      if (r.concluded || (onlyWithoutGenerationEnd && r.generationEnded)) return
+      check(r, label)
+        .then(() => conclude(r))
+        .catch(logError)
+    }, delay)
     .catch(logError)
-  return { text: truncateChunks(text, end), stopGeneration: true }
 }
 
-async function finish(r: Run): Promise<void> {
+async function check(r: Run, label: string): Promise<void> {
   const doc = await readDocument()
-  const verdict = judge(r, doc.text)
-  await api.v1.storyStorage.set(KEYS.diagReport, formatReport(r, verdict, doc.tail))
-  await api.v1.storyStorage.set(KEYS.diagLastRun, r)
-  const conclusive = r.cutText !== undefined || r.responseCalls === 0
-  if (conclusive) await api.v1.storyStorage.set(KEYS.diagArmed, false)
-  await api.v1.ui.toast(
-    conclusive
-      ? 'Stop test finished. The report is in the Text Adventure+ sidebar panel.'
-      : 'Stop test inconclusive. It is still armed; see the sidebar panel.',
-    { type: conclusive ? 'success' : 'warning' },
-  )
+  r.checks.push({ label, verdict: judge(r, doc.text) })
+  r.documentTail = doc.tail
+  r.nodeAfter = await api.v1.document.history.currentNodeId().catch(() => undefined)
+  r.latestGenerationNode = await api.v1.document.history.mostRecentGenerationNodeId().catch(() => undefined)
 }
 
-async function recheck(): Promise<void> {
-  const r = run ?? ((await api.v1.storyStorage.get(KEYS.diagLastRun)) as Run | null | undefined)
-  if (!r) {
-    await api.v1.ui.toast('No stop test has run in this story yet.', { type: 'info' })
-    return
-  }
-  await finish(r)
+async function conclude(r: Run): Promise<void> {
+  if (r.concluded) return
+  r.concluded = true
+  const turns: string[] = (await api.v1.storyStorage.get(KEYS.diagTurns)) ?? []
+  turns[r.step] = formatTurn(r)
+  await api.v1.storyStorage.set(KEYS.diagTurns, turns)
+
+  const noHooks = r.responseCalls === 0
+  const step = r.wanted === undefined ? r.step : r.step + 1
+  const done = noHooks || step >= TECHNIQUES.length
+  await api.v1.storyStorage.set(KEYS.diagStep, step)
+  if (done) await api.v1.storyStorage.set(KEYS.diagArmed, false)
+  await api.v1.storyStorage.set(KEYS.diagReport, formatReport(turns, step, r))
+
+  if (noHooks) await toast('Stop test stopped: onResponse never ran. See the report.', 'warning')
+  else if (r.wanted === undefined) await toast(`Stop test turn ${r.step + 1}: the response was too short. Take another turn.`, 'warning')
+  else if (!done) await toast(`Stop test turn ${r.step + 1} of ${TECHNIQUES.length} done. Take your next turn.`, 'info')
+  else await toast('Stop test finished. Press Copy report in the Text Adventure+ panel.', 'success')
+}
+
+async function resetTest(): Promise<void> {
+  run = undefined
+  await api.v1.storyStorage.set(KEYS.diagStep, 0)
+  await api.v1.storyStorage.set(KEYS.diagTurns, [])
+  await api.v1.storyStorage.set(KEYS.diagReport, `Armed. Take your next turn (1 of ${TECHNIQUES.length}).`)
 }
 
 async function copyReport(): Promise<void> {
@@ -158,58 +220,60 @@ async function copyReport(): Promise<void> {
   if (!granted) return
   const report = await api.v1.storyStorage.get(KEYS.diagReport)
   await api.v1.clipboard.writeText(String(report ?? ''))
-  await api.v1.ui.toast('Report copied.', { type: 'success' })
+  await toast('Report copied.', 'success')
 }
 
 function judge(r: Run, documentText: string): string {
   if (r.responseCalls === 0) {
-    return 'FAIL: onResponse never ran. The live cut-off needs GLM 4.6; check which model this story uses.'
+    return 'FAIL: onResponse never ran. The live cut-off needs a chat-endpoint model such as Xialong or GLM 4.6.'
   }
-  if (r.cutText === undefined) {
-    if (r.responseCalls === 1) {
-      return 'INCONCLUSIVE: the whole response arrived at once. Streaming may be off; turn it on and take another turn.'
-    }
-    return 'INCONCLUSIVE: the response ended before two full sentences. The test is still armed; take another, longer turn.'
+  if (r.wanted === undefined) {
+    if (r.responseCalls === 1) return 'INCONCLUSIVE: the whole response arrived at once. Streaming may be off.'
+    return 'INCONCLUSIVE: the response ended before two full sentences.'
   }
   const doc = normalize(documentText)
+  const wanted = normalize(r.wanted)
   const released = normalize(r.released)
-  const cut = normalize(r.cutText)
-  if (doc.endsWith(normalize(r.released + r.cutText))) {
-    return 'PASS: the early text stayed, the trimmed text sent with the stop landed, and nothing came after the cut.'
+  if (doc.endsWith(wanted)) return 'PASS: exactly the text up to the cut is in the editor.'
+  if (doc.includes(wanted)) {
+    return `PARTIAL: text after the cut got through: ${quote(doc.slice(doc.lastIndexOf(wanted) + wanted.length).trim(), 120)}`
   }
-  const at = released ? doc.lastIndexOf(released) : -1
-  if (at < 0) {
-    return 'UNKNOWN: the text released before the cut is not in the document. Was the story edited or undone before the check?'
+  if (doc.endsWith(released)) return 'PARTIAL: only the first sentence is in the editor; the second was dropped.'
+  if (doc.includes(released)) {
+    return `PARTIAL: the first sentence is there, followed by unexpected text: ${quote(doc.slice(doc.lastIndexOf(released) + released.length).trim(), 120)}`
   }
-  const after = doc.slice(at + released.length).trim()
-  if (after === '') return 'PARTIAL: the early text landed, but the trimmed text sent with the stop was dropped.'
-  if (after.startsWith(cut)) {
-    return `PARTIAL: the stop did not fully halt. Extra text came after the cut point: ${quote(after.slice(cut.length), 120)}`
-  }
-  return `UNKNOWN: unexpected text after the early part: ${quote(after, 120)}`
+  return 'FAIL: none of the generated text is in the editor.'
 }
 
-function formatReport(r: Run, verdict: string, documentTail: string[]): string {
-  const yesNo = (value: boolean) => (value ? 'yes' : 'no')
+function formatTurn(r: Run): string {
   const ta = r.taInput
+  const taText = ta
+    ? `${ta.mode} ${quote(ta.inputText, 80)}${ta.continuityId === r.continuityId ? '' : ' (from an earlier turn)'}`
+    : 'none'
+  const visible = r.midStreamVisible === undefined ? 'not checked' : yesNo(r.midStreamVisible)
+  return [
+    `Turn ${r.step + 1} of ${TECHNIQUES.length}: ${r.technique.label}`,
+    ...r.checks.map((c) => `  ${c.label}: ${c.verdict}`),
+    `  onResponse calls: ${r.responseCalls} (held back ${r.heldCalls}) | cut at call ${r.cutCall ?? '-'} (final: ${yesNo(r.cutOnFinal)}) | after the cut: ${r.afterCutCalls} calls, ${r.afterCutChars} chars, whole response resent: ${yesNo(r.afterCutResent)}`,
+    `  Final call: ${r.finalCall ?? 'never arrived'} | onGenerationEnd: ${yesNo(r.generationEnded)} | first sentence visible mid-stream: ${visible}`,
+    `  History node: ${r.nodeBefore ?? '?'} -> ${r.nodeAfter ?? '?'} (latest generation node: ${r.latestGenerationNode ?? 'none'})`,
+    `  Model: ${r.model} | max_tokens: ${r.maxTokens ?? 'unknown'} | TA input: ${taText}`,
+    r.wanted === undefined
+      ? `  Released: ${quote(r.released, 200)} (never reached the cut)`
+      : `  Should remain: ${quote(r.wanted, 240)}`,
+  ].join('\n')
+}
+
+function formatReport(turns: string[], step: number, latest: Run): string {
   const lines = [
-    `Text Adventure+ stop test (v${api.v1.script.version})`,
-    `Run: ${r.startedAt}`,
-    `Result: ${verdict}`,
+    `Text Adventure+ stop test (v${api.v1.script.version}): ${Math.min(step, TECHNIQUES.length)} of ${TECHNIQUES.length} turns done`,
     '',
-    `Model: ${r.model} | max_tokens: ${r.maxTokens ?? 'unknown'} | script-initiated: ${yesNo(r.scriptInitiated)}`,
-    `onResponse calls: ${r.responseCalls} (held back ${r.heldCalls}, after stop ${r.callsAfterStop}) | final call seen: ${yesNo(r.finalSeen)} | onGenerationEnd fired: ${yesNo(r.generationEnded)}`,
-    `Released before cut: ${quote(r.released, 200)}`,
-    `Sent with stop: ${r.cutText === undefined ? '(never reached)' : quote(r.cutText, 200)} | on final call: ${yesNo(r.cutOnFinal === true)}`,
-    ta
-      ? `TA input: ${ta.mode} | input ${quote(ta.inputText, 80)} | raw ${quote(ta.rawInputText, 80)} | same turn: ${yesNo(ta.continuityId === r.continuityId)}`
-      : 'TA input: none recorded',
+    ...turns.filter(Boolean).flatMap((turn) => [turn, '']),
+    'Latest turn, context sent to the AI:',
+    ...(latest.context ?? ['(not recorded)']),
     '',
-    'Context sent to the AI:',
-    ...(r.context ?? ['(not recorded)']),
-    '',
-    'End of document:',
-    ...documentTail,
+    'Latest turn, end of document:',
+    ...latest.documentTail,
   ]
   // The panel shows this through a {{storage}} template, so keep story text from looking like one.
   return lines.join('\n').replace(/\{\{/g, '{ {')
@@ -241,6 +305,14 @@ function quote(text: string, max: number): string {
   return JSON.stringify(text.length > max ? '…' + text.slice(-max) : text)
 }
 
+function yesNo(value: boolean | undefined): string {
+  return value ? 'yes' : 'no'
+}
+
+function toast(message: string, type: 'info' | 'success' | 'warning'): Promise<void> {
+  return api.v1.ui.toast(message, { type })
+}
+
 export function diagnosticsSection(): UIPart {
   return {
     type: 'collapsibleSection',
@@ -250,27 +322,17 @@ export function diagnosticsSection(): UIPart {
       { type: 'text', markdown: true, text: HELP },
       {
         type: 'checkboxInput',
-        label: 'Run the stop test on my next turn',
+        label: 'Run the stop test on my next three turns',
         storageKey: `story:${KEYS.diagArmed}`,
+        onChange: (on) => {
+          if (on) resetTest().catch(logError)
+        },
       },
       {
-        type: 'row',
-        spacing: 'start',
-        content: [
-          {
-            type: 'button',
-            text: 'Check result now',
-            iconId: 'refresh',
-            disabledWhileCallbackRunning: true,
-            callback: () => recheck().catch(logError),
-          },
-          {
-            type: 'button',
-            text: 'Copy report',
-            iconId: 'copy',
-            callback: () => copyReport().catch(logError),
-          },
-        ],
+        type: 'button',
+        text: 'Copy report',
+        iconId: 'copy',
+        callback: () => copyReport().catch(logError),
       },
       {
         type: 'text',

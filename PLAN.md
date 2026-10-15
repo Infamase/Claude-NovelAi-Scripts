@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 0 built (v0.1.1)**. Waiting on the in-NovelAI checks (see README).
+Status: **Phase 0 (v0.1.2)**. The first stop test lost the turn's text when the script stopped generation; v0.1.2 compares three cutting techniques.
 
 ---
 
@@ -16,7 +16,7 @@ Status: **Phase 0 built (v0.1.1)**. Waiting on the in-NovelAI checks (see README
 
 | Topic | Decision |
 |---|---|
-| Model | **GLM 4.6**. This gives us the live streaming hooks, so the script can cut generation off mid-stream. |
+| Model | **Xialong** (`xialong-v1`), as the stop test showed. Like GLM 4.6 it uses the chat endpoint, so the streaming hooks work and the script can cut generation off mid-stream. |
 | How much the AI may write about your character | Default: **reactions allowed**. Sensations and involuntary reactions are fine ("the ale burns your throat; you cough"). New speech, decisions and deliberate actions are cut. A toggle switches to **strict** (the world and NPCs only). |
 | Inventory/Party updates | **Manual in v1.** You edit the tabs yourself. Auto-tracking is a later phase. |
 | v1 tracking extras | Item **quantities**, **equipped** items, a **currency** counter, and per-member party **status** and **attitude**. |
@@ -156,12 +156,20 @@ dist/text-adventure-plus.naiscript   ← the file you import
 
 **Later ideas:** auto-tracking ("you pick up the key" → a suggested inventory change), linking party members to existing Lorebook entries, simple stats, and state that follows undo/redo.
 
+### Phase 0 findings so far
+
+- **`api.v1.ui.register` replaces all of the script's UI.** Panels added later must go through `api.v1.ui.update`. (This caused the "UI callback failed" bug, fixed in v0.1.1.)
+- **Xialong fires every hook** the plan relies on: `onTextAdventureInput`, `onGenerationRequested`, `onContextBuilt`, `onResponse` and `onGenerationEnd`.
+- **Context layout on Xialong:** `system` (the model's prompt) → `user` (memory and tags, ending in "Write.") → `assistant` (the story so far) → `user` (your latest Do/Say input, e.g. `You ask "Speak…with?"`) → an empty `assistant` (the reply to write). Each input is its own user message, so the narrator rules can sit right next to it.
+- **Inputs are stored as their own paragraphs** marked `dialogue`/`action` with origin `user`, without the `>`.
+- **First stop test (cut and stop in one step):** none of the turn's text stayed in the editor, not even the sentence let through before the stop, and one more `onResponse` call arrived after the stop. v0.1.2 tries three techniques to find one that keeps the text.
+
 ## 11. Risks
 
-- **Trim plus stop in one step.** It isn't documented whether trimmed text that comes with `stopGeneration` still reaches the editor. Phase 0 tests this. The fallback is to hold text back with `seenData` and then remove the extra through the Document API.
+- **Script stops can lose text.** In the first stop test, stopping generation lost the whole turn. v0.1.2 compares three techniques. If no technique that stops generation keeps the text, the fallback is to hide everything after the cut without stopping: the model keeps generating, unseen, up to the length cap. That makes Layer 3's cap important.
 - **Detector accuracy.** A heuristic will sometimes cut too early or too late. It is tunable and covered by tests, and the status line shows exactly what it caught.
 - **Persisted settings.** `generationParameters.update` saves into the story's settings, so the script always restores the original value, including on the next load if something went wrong mid-turn.
-- **GLM only.** On models that use the older endpoint, the streaming hooks don't run. The script detects this and shows a notice rather than failing silently.
+- **Chat-endpoint models only** (Xialong, GLM 4.6). On models that use the older endpoint, the streaming hooks don't run. The script detects this and shows a notice rather than failing silently.
 - **Token cost.** The injected state takes up context space, so the format stays compact.
 
 ## 12. Open questions (answer whenever)

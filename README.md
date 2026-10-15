@@ -1,6 +1,6 @@
 # Text Adventure+
 
-A NovelAI user script for Text Adventure mode on GLM 4.6:
+A NovelAI user script for Text Adventure mode on Xialong or GLM 4.6:
 
 - **Stops at your turn.** The AI writes what happens because of your action, then stops. It doesn't write your next words or moves, and it never asks "What do you do?" *(Phase 1)*
 - **Party tab** in the bottom bar, fed into the story context. *(Phase 3)*
@@ -8,7 +8,7 @@ A NovelAI user script for Text Adventure mode on GLM 4.6:
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.1.1, Phase 0 preview
+## Status: v0.1.2, Phase 0 preview
 
 This version is the shell: a settings panel, placeholder Party and Inventory tabs, and a **stop test** that checks how NovelAI handles the script cutting a response short.
 
@@ -19,7 +19,7 @@ This version is the shell: a settings panel, placeholder Party and Inventory tab
 3. **Import** the file as an **account script**.
 4. Open a Text Adventure story. In the right sidebar, open the **"…"** tab, then **Text Adventure+**, and tick **Enable for this story**.
 
-The story's model must be **GLM 4.6** and streaming should be on.
+The story must use a chat-endpoint model (**Xialong** or **GLM 4.6**), and streaming should be on.
 
 To update, import the new file the same way. It has the same script id, so it replaces the old version.
 
@@ -29,8 +29,8 @@ If a script ever makes NovelAI unusable, add `?noscript=true` to the end of the 
 
 1. After you tick **Enable for this story**, **Party** and **Inventory** tabs appear just above the bottom controls. Untick it and they disappear.
 2. Run the stop test:
-   1. In the Text Adventure+ sidebar panel, open **Diagnostics: stop test** and tick **Run the stop test on my next turn**.
-   2. Take one normal turn with an action that should get several sentences back.
+   1. In the Text Adventure+ sidebar panel, open **Diagnostics: stop test** and tick **Run the stop test on my next three turns**.
+   2. Take three normal turns with actions that should get several sentences back. Each turn tries a different way of cutting the response, and a notification tells you when each one is done.
    3. Press **Copy report** and send the report to Claude.
 
 ## Development

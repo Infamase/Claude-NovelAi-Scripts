@@ -4,7 +4,8 @@ export const KEYS = {
   enabled: 'tap.enabled',
   diagArmed: 'tap.diag.armed',
   diagReport: 'tap.diag.report',
-  diagLastRun: 'tap.diag.lastRun',
+  diagStep: 'tap.diag.step',
+  diagTurns: 'tap.diag.turns',
 } as const
 
 export const IDS = {
