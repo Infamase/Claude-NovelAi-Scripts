@@ -63,7 +63,7 @@ const PERCEPTION = new Set(
 
 /** Involuntary physical reactions: allowed unless strict mode is on. */
 const REACTIONS = new Set(
-  'feel feels felt flinch flinches flinched wince winces winced shiver shivers shivered shudder shudders shuddered tremble trembles trembled gasp gasps gasped cough coughs coughed choke chokes choked sneeze sneezes sneezed freeze freezes froze stagger staggers staggered stumble stumbles stumbled blink blinks blinked sweat sweats sweated blush blushes blushed gag gags gagged recoil recoils recoiled jolt jolts jolted startle startles startled fall falls fell slip slips slipped wake wakes woke awaken awakens awakened'.split(
+  'feel feels felt flinch flinches flinched wince winces winced shiver shivers shivered shudder shudders shuddered tremble trembles trembled gasp gasps gasped cough coughs coughed choke chokes choked sneeze sneezes sneezed freeze freezes froze stagger staggers staggered stumble stumbles stumbled blink blinks blinked sweat sweats sweated blush blushes blushed gag gags gagged recoil recoils recoiled jolt jolts jolted startle startles startled fall falls fell slip slips slipped wake wakes woke awaken awakens awakened swallow swallows swallowed gulp gulps gulped tense tenses tensed stiffen stiffens stiffened cringe cringes cringed sway sways swayed wheeze wheezes wheezed pant pants panted groan groans groaned whimper whimpers whimpered grimace grimaces grimaced collapse collapses collapsed faint faints fainted twitch twitches twitched jerk jerks jerked'.split(
     ' ',
   ),
 )

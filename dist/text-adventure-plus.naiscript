@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792066759835
-version: 0.2.0
+updatedAt: 1792067643889
+version: 0.2.1
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -21,7 +21,9 @@ memoryLimit: 8
     referee: "tap.referee",
     /** Story: summary and full details of the last guarded turn. */
     lastTurnStatus: "tap.lastTurn.status",
-    lastTurnDetails: "tap.lastTurn.details"
+    lastTurnDetails: "tap.lastTurn.details",
+    /** Story: the result of the last "Test the referee" run. */
+    refereeTest: "tap.refereeTest"
   };
   var OLD_STORY_KEYS = ["tap.diag.armed", "tap.diag.report", "tap.diag.step", "tap.diag.turns", "tap.diag.lastRun"];
   var IDS = {
@@ -168,7 +170,7 @@ memoryLimit: 8
     )
   );
   var REACTIONS = new Set(
-    "feel feels felt flinch flinches flinched wince winces winced shiver shivers shivered shudder shudders shuddered tremble trembles trembled gasp gasps gasped cough coughs coughed choke chokes choked sneeze sneezes sneezed freeze freezes froze stagger staggers staggered stumble stumbles stumbled blink blinks blinked sweat sweats sweated blush blushes blushed gag gags gagged recoil recoils recoiled jolt jolts jolted startle startles startled fall falls fell slip slips slipped wake wakes woke awaken awakens awakened".split(
+    "feel feels felt flinch flinches flinched wince winces winced shiver shivers shivered shudder shudders shuddered tremble trembles trembled gasp gasps gasped cough coughs coughed choke chokes choked sneeze sneezes sneezed freeze freezes froze stagger staggers staggered stumble stumbles stumbled blink blinks blinked sweat sweats sweated blush blushes blushed gag gags gagged recoil recoils recoiled jolt jolts jolted startle startles startled fall falls fell slip slips slipped wake wakes woke awaken awakens awakened swallow swallows swallowed gulp gulps gulped tense tenses tensed stiffen stiffens stiffened cringe cringes cringed sway sways swayed wheeze wheezes wheezed pant pants panted groan groans groaned whimper whimpers whimpered grimace grimaces grimaced collapse collapses collapsed faint faints fainted twitch twitches twitched jerk jerks jerked".split(
       " "
     )
   );
@@ -216,8 +218,13 @@ memoryLimit: 8
   }
 
   // src/guard/referee.ts
-  var TIMEOUT_MS = 12e3;
+  var TIMEOUT_MS = 1e4;
   var MAX_OUTPUT_TOKENS = 8;
+  var working;
+  var running = false;
+  function isRefereeRunning() {
+    return running;
+  }
   function refereePrompt({ storyTail, playerInput, sentences, strict }) {
     const allowed = strict ? "Allowed: carrying out exactly what the player typed, and what the player character sees and hears. Nothing else about the player character, not even physical reactions." : "Allowed: carrying out what the player typed, what the player character sees and hears, and involuntary physical reactions such as a flinch or a racing heart.";
     const user = [
@@ -259,21 +266,57 @@ memoryLimit: 8
     const answer = Number(match[0]);
     return answer <= count ? answer : void 0;
   }
-  async function askReferee(model, input) {
+  function attempts(storyModel) {
+    const base = { max_tokens: MAX_OUTPUT_TOKENS, temperature: 0 };
+    const list = [
+      ...working ? [working] : [],
+      { model: storyModel, params: { ...base, enable_thinking: false } },
+      { model: "glm-4-6", params: { ...base, enable_thinking: false } },
+      { model: storyModel, params: base }
+    ];
+    const seen = /* @__PURE__ */ new Set();
+    return list.filter((a) => {
+      const key = JSON.stringify(a);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+  async function askReferee(storyModel, input) {
     const started = Date.now();
     const elapsed = () => Date.now() - started;
     if (api.v1.script.getAllowedOutput() < MAX_OUTPUT_TOKENS) {
-      return { raw: "", ms: 0, error: "the script's generation allowance is used up for now" };
+      return { raw: "", ms: 0, error: "the script's AI allowance is used up for now" };
     }
+    const messages = refereePrompt(input);
+    const errors = [];
+    running = true;
+    try {
+      for (const attempt of attempts(storyModel)) {
+        const label = `${attempt.model}${"enable_thinking" in attempt.params ? "" : " without the thinking switch"}`;
+        const outcome = await generateOnce(attempt, messages);
+        if (outcome.timedOut) {
+          errors.push(`${label}: no answer within ${TIMEOUT_MS / 1e3} s`);
+          break;
+        }
+        if (outcome.error !== void 0) {
+          errors.push(`${label}: ${outcome.error}`);
+          continue;
+        }
+        working = attempt;
+        const raw = outcome.text ?? "";
+        const answer = parseRefereeAnswer(raw, input.sentences.length);
+        return answer === void 0 ? { raw, ms: elapsed(), model: attempt.model, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer, raw, ms: elapsed(), model: attempt.model };
+      }
+      return { raw: "", ms: elapsed(), error: errors.join("; ") };
+    } finally {
+      running = false;
+    }
+  }
+  async function generateOnce(attempt, messages) {
     const signal = await api.v1.createCancellationSignal();
     try {
-      const request = api.v1.generate(
-        refereePrompt(input),
-        { model, max_tokens: MAX_OUTPUT_TOKENS, temperature: 0, enable_thinking: false },
-        void 0,
-        "background",
-        signal
-      );
+      const request = api.v1.generate(messages, { model: attempt.model, ...attempt.params }, void 0, "background", signal);
       request.catch(() => {
       });
       const timeout = new Promise((resolve) => {
@@ -283,84 +326,145 @@ memoryLimit: 8
       if (response === "timeout") {
         signal.cancel().catch(() => {
         });
-        return { raw: "", ms: elapsed(), error: `no answer within ${TIMEOUT_MS / 1e3} s` };
+        return { timedOut: true };
       }
-      const raw = response.choices[0]?.text ?? "";
-      const answer = parseRefereeAnswer(raw, input.sentences.length);
-      return answer === void 0 ? { raw, ms: elapsed(), error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer, raw, ms: elapsed() };
+      return { text: response.choices[0]?.text ?? "" };
     } catch (error) {
-      return { raw: "", ms: elapsed(), error: error instanceof Error ? error.message : String(error) };
+      return { error: describeError(error) };
     } finally {
       signal.dispose();
     }
   }
+  function describeError(error) {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    if (error && typeof error === "object") {
+      const fields = error;
+      const message = [fields.message, fields.error, fields.reason, fields.statusText].find((v) => typeof v === "string");
+      const status = fields.status ?? fields.statusCode ?? fields.code;
+      if (typeof message === "string") return status === void 0 ? message : `${message} (${String(status)})`;
+      try {
+        return JSON.stringify(error).slice(0, 300);
+      } catch {
+      }
+    }
+    return String(error);
+  }
 
   // src/guard/rules.ts
+  var GAME_FRAMING = `This is an interactive text adventure. The user plays the character called "you", and each of their messages is that character's next action or line. Reply with only the world's response to it: never write for the player character.`;
   function narratorRules(strict) {
-    const playerCharacter = strict ? "- Never write anything the player character says, thinks, feels, decides or does beyond what the player typed. Describe only the world and the other characters." : "- Never write the player character's speech, thoughts, conclusions, decisions or deliberate actions beyond what the player typed. Involuntary physical reactions (a flinch, a cough, a racing heart) are fine.";
     return [
-      "[ Narration rules for this reply:",
-      "- Write only what happens because of the player's latest input: how the world, the other characters and any companions respond, and what the player character sees and hears.",
-      playerCharacter,
-      "- Stop as soon as the player character would need to speak, act or decide. End on the world, never on a question: do not ask what the player does, offer choices or address the player. ]"
+      "Narrate what happens as a direct result of this, then stop. Rules:",
+      "1. Write only the world's response: what the other characters and any companions say and do, and what the player character sees and hears.",
+      strict ? "2. Never write anything the player character says, thinks, feels, decides or does beyond what the player wrote, not even physical reactions." : "2. Never write the player character's speech, thoughts, decisions or deliberate actions beyond what the player wrote. Involuntary physical reactions, like a flinch or a racing heart, are fine.",
+      "3. Stop at the first moment the player character could speak, act or decide. Never continue a conversation on their behalf.",
+      "4. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.",
+      "5. Keep it short: one to three short paragraphs."
     ].join("\n");
   }
-  function withRules(messages, rules) {
-    const result = messages.map((m) => ({ ...m }));
-    let target = -1;
-    for (let i = result.length - 1; i >= 0 && target < 0; i--) if (result[i].role === "user") target = i;
-    if (target < 0) target = result.findIndex((m) => m.role === "system");
-    if (target < 0) return [{ role: "system", content: rules }, ...result];
-    const content = result[target].content ?? "";
-    result[target].content = content ? `${content}
+  function addedText(strict) {
+    return `
 
-${rules}` : rules;
+${GAME_FRAMING}
+The player's action:
+
+
+${narratorRules(strict)}`;
+  }
+  function withRules(messages, strict) {
+    const result = messages.map((m) => ({ ...m }));
+    const system = result.findIndex((m) => m.role === "system");
+    if (system >= 0) result[system].content = joinParts(result[system].content, GAME_FRAMING);
+    else result.unshift({ role: "system", content: GAME_FRAMING });
+    const rules = narratorRules(strict);
+    const input = playerInputIndex(result);
+    if (input >= 0) {
+      result[input].content = `The player's action:
+${result[input].content ?? ""}
+
+${rules}`;
+      return result;
+    }
+    let lastUser = -1;
+    for (let i = result.length - 1; i >= 0 && lastUser < 0; i--) if (result[i].role === "user") lastUser = i;
+    const target = lastUser >= 0 ? lastUser : 0;
+    result[target].content = joinParts(result[target].content, rules);
     return result;
   }
   function turnContext(messages) {
-    let lastStory = -1;
-    for (let i = messages.length - 1; i >= 0 && lastStory < 0; i--) {
-      if (messages[i].role === "assistant" && (messages[i].content ?? "").trim()) lastStory = i;
+    const story = lastStoryIndex(messages);
+    const input = playerInputIndex(messages);
+    const storyText = story >= 0 ? messages[story].content ?? "" : "";
+    return {
+      playerInput: input >= 0 ? messages[input].content : void 0,
+      storyTail: storyText.slice(-1200) || void 0
+    };
+  }
+  function lastStoryIndex(messages) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant" && (messages[i].content ?? "").trim()) return i;
     }
-    let playerInput;
-    for (let i = messages.length - 1; i > lastStory && playerInput === void 0; i--) {
-      if (messages[i].role === "user") playerInput = messages[i].content;
+    return -1;
+  }
+  function playerInputIndex(messages) {
+    const story = lastStoryIndex(messages);
+    for (let i = messages.length - 1; i > story; i--) {
+      if (messages[i].role === "user") return i;
     }
-    const story = lastStory >= 0 ? messages[lastStory].content ?? "" : "";
-    return { playerInput, storyTail: story.slice(-1200) || void 0 };
+    return -1;
+  }
+  function joinParts(first, second) {
+    return first ? `${first}
+
+${second}` : second;
   }
 
   // src/guard/turnGuard.ts
+  var MAX_AUTO_RETRIES = 2;
   var turns = /* @__PURE__ */ new Map();
-  var ruleTokens = /* @__PURE__ */ new Map();
+  var addedTokens = /* @__PURE__ */ new Map();
+  var retriesInARow = 0;
   function registerTurnGuard() {
-    api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model, scriptInitiated, inlineGeneration, toolboxMode }) => {
-      if (scriptInitiated || inlineGeneration || toolboxMode || !await isEnabled()) return;
+    api.v1.hooks.register("onTextAdventureInput", () => {
+      retriesInARow = 0;
+    });
+    api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model, inlineGeneration, toolboxMode }) => {
+      if (inlineGeneration || toolboxMode || isRefereeRunning() || !await isEnabled()) return;
       turns.set(continuityId, { model, ...await readSettings() });
     });
     api.v1.hooks.register("onBeforeContextBuild", async ({ continuityId, model, dryRun }) => {
       const settings = await settingsFor(continuityId, dryRun);
       if (!settings) return;
-      return { contextLimitReduction: await rulesTokens(model, settings.strict) };
+      return { contextLimitReduction: await addedTokenCount(model, settings.strict) };
     });
     api.v1.hooks.register("onContextBuilt", async ({ continuityId, dryRun, messages }) => {
       const settings = await settingsFor(continuityId, dryRun);
       if (!settings) return;
       const turn = turns.get(continuityId);
       if (turn && !dryRun) Object.assign(turn, turnContext(messages));
-      return { messages: withRules(messages, narratorRules(settings.strict)) };
+      return { messages: withRules(messages, settings.strict) };
     });
     api.v1.hooks.register("onResponse", async ({ continuityId, text, final }) => {
       const turn = turns.get(continuityId);
       if (!turn) return;
       if (!final) return { seenData: 0 };
       const decision = await decide(turn, text.join(""));
+      if (keptNothing(decision)) {
+        if (retriesInARow < MAX_AUTO_RETRIES) turn.retryNumber = retriesInARow + 1;
+      } else {
+        retriesInARow = 0;
+      }
       report(turn, decision).catch(logError);
       if (decision.keep === decision.reply.length) return;
       return { text: truncateChunks(text, decision.keep) };
     });
     api.v1.hooks.register("onGenerationEnd", ({ continuityId }) => {
+      const turn = turns.get(continuityId);
       turns.delete(continuityId);
+      if (turn?.retryNumber === void 0) return;
+      retriesInARow = turn.retryNumber;
+      api.v1.timers.setTimeout(() => api.v1.editor.generate().catch(logError), 50).catch(logError);
     });
   }
   async function decide(turn, reply) {
@@ -394,17 +498,26 @@ ${rules}` : rules;
     while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
     return { reply, sentences, keep, cut, unfinishedTrimmed, referee };
   }
+  function keptNothing(decision) {
+    return decision.keep === 0 && decision.reply.trim() !== "";
+  }
   async function report(turn, decision) {
-    await api.v1.storyStorage.set(KEYS.lastTurnStatus, sanitize(statusText(decision)));
+    await api.v1.storyStorage.set(KEYS.lastTurnStatus, sanitize(statusText(decision, turn)));
     await api.v1.storyStorage.set(KEYS.lastTurnDetails, sanitize(detailsText(turn, decision)));
-    if (decision.keep === 0 && decision.reply.trim()) {
+    if (!keptNothing(decision)) return;
+    if (turn.retryNumber !== void 0) {
       await api.v1.ui.toast(
-        "Text Adventure+: the reply started by writing for your character, so nothing was added. Press Retry.",
+        `Text Adventure+: the reply wrote for your character from its first sentence, so it was dropped. Asking again (${turn.retryNumber} of ${MAX_AUTO_RETRIES})…`,
+        { type: "info" }
+      );
+    } else {
+      await api.v1.ui.toast(
+        `Text Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. Try rewording your action${turn.strict ? ", or turn off Strict" : ""}.`,
         { type: "warning" }
       );
     }
   }
-  function statusText(d) {
+  function statusText(d, turn) {
     if (!d.reply.trim()) return "Last turn: the AI wrote nothing.";
     const total = d.sentences.length;
     const kept = d.sentences.filter((s) => s.start < d.keep).length;
@@ -415,14 +528,18 @@ ${rules}` : rules;
         kept === 0 ? `Last turn: nothing was kept. The reply started by writing for your character: ${sentence}` : `Last turn: kept ${kept} of ${total} sentences. Cut from: ${sentence}`,
         `Why: ${d.cut.reason} (found by the ${d.cut.by === "referee" ? "referee" : "pattern rules"}).`
       );
+      if (kept === 0 && turn?.retryNumber !== void 0) {
+        lines.push(`Asking the AI again automatically (${turn.retryNumber} of ${MAX_AUTO_RETRIES}).`);
+      }
     } else if (d.unfinishedTrimmed) {
       lines.push(`Last turn: kept ${kept} of ${total} sentences, minus an unfinished last sentence.`);
     } else {
       lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? "" : "s"}).`);
     }
     if (d.referee) {
+      const seconds = `${(d.referee.ms / 1e3).toFixed(1)} s`;
       lines.push(
-        d.referee.error ? `Referee: unavailable (${d.referee.error}), so the pattern rules checked for actions too.` : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : "no problems"} (${(d.referee.ms / 1e3).toFixed(1)} s).`
+        d.referee.error ? `Referee: unavailable (${d.referee.error}), so the pattern rules checked for actions too.` : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : "no problems"} (${d.referee.model}, ${seconds}).`
       );
     }
     return lines.join("\n");
@@ -436,12 +553,26 @@ ${rules}` : rules;
       `Text Adventure+ last turn (v${api.v1.script.version})`,
       `Model: ${turn.model} | strict: ${turn.strict ? "on" : "off"} | referee: ${turn.referee ? "on" : "off"}`,
       `Player input: ${turn.playerInput === void 0 ? "(none)" : quote(turn.playerInput, 400)}`,
-      statusText(d),
+      statusText(d, turn),
       d.referee ? `Referee answer: ${quote(d.referee.raw, 40)}` : "Referee: not asked",
       "Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):",
       ...marks,
       `Story just before: ${quote(turn.storyTail ?? "", 400)}`
     ].join("\n");
+  }
+  var REFEREE_SAMPLE = {
+    storyTail: 'The dragon opens one violet eye. "Awake, are we?"',
+    playerInput: 'You ask "Who are you?"',
+    sentences: ["The dragon lifts her head from the pile of books.", '"Where am I?" you whisper.', "She laughs, a sound like rolling thunder."],
+    strict: false
+  };
+  async function runRefereeTest() {
+    const settings = await api.v1.generationParameters.get().catch(() => void 0);
+    const result = await askReferee(settings?.model ?? "glm-4-6", REFEREE_SAMPLE);
+    const where = `${result.model}, ${(result.ms / 1e3).toFixed(1)} s`;
+    const text = result.error ? `Referee test failed: ${result.error}` : result.answer === 2 ? `Referee test passed: it found the right sentence (${where}).` : `Referee test: it works, but answered ${result.answer} where 2 was right (${where}).`;
+    await api.v1.storyStorage.set(KEYS.refereeTest, sanitize(text));
+    return text;
   }
   async function isEnabled() {
     return await api.v1.storyStorage.get(KEYS.enabled) === true;
@@ -458,17 +589,15 @@ ${rules}` : rules;
     if (dryRun && await isEnabled()) return readSettings();
     return void 0;
   }
-  async function rulesTokens(model, strict) {
+  async function addedTokenCount(model, strict) {
     const key = `${model}|${strict}`;
-    let count = ruleTokens.get(key);
+    let count = addedTokens.get(key);
     if (count === void 0) {
-      const rules = `
-
-${narratorRules(strict)}`;
-      count = await api.v1.tokenizer.encode(rules, model).then((tokens) => tokens.length).catch(() => Math.ceil(rules.length / 3));
-      ruleTokens.set(key, count);
+      const text = addedText(strict);
+      count = await api.v1.tokenizer.encode(text, model).then((tokens) => tokens.length).catch(() => Math.ceil(text.length / 3));
+      addedTokens.set(key, count);
     }
-    return count + 4;
+    return count + 8;
   }
   function quote(text, max) {
     return JSON.stringify(text.length > max ? text.slice(0, max) + "…" : text);
@@ -588,6 +717,31 @@ ${narratorRules(strict)}`;
                 style: { opacity: 0.7, fontSize: "0.85em" }
               }
             ]
+          },
+          {
+            type: "collapsibleSection",
+            title: "Referee check",
+            iconId: "check-circle",
+            initialCollapsed: true,
+            content: [
+              {
+                type: "text",
+                text: "Runs the referee once on a made-up turn, outside any reply, to check that it can reach the AI.",
+                style: { opacity: 0.7, fontSize: "0.85em" }
+              },
+              {
+                type: "button",
+                text: "Test the referee",
+                iconId: "play",
+                disabledWhileCallbackRunning: true,
+                callback: () => runRefereeTest().then((result) => api.v1.ui.toast(result, { type: result.includes("passed") ? "success" : "warning" })).catch(logError)
+              },
+              {
+                type: "text",
+                text: `{{story:${KEYS.refereeTest}}}`,
+                style: { whiteSpace: "pre-wrap", fontSize: "0.9em" }
+              }
+            ]
           }
         ]
       }
@@ -612,6 +766,7 @@ ${narratorRules(strict)}`;
   async function init() {
     await api.v1.storage.setIfAbsent(KEYS.referee, true);
     await api.v1.storyStorage.setIfAbsent(KEYS.lastTurnStatus, "No turn checked yet.");
+    await api.v1.storyStorage.setIfAbsent(KEYS.refereeTest, "Not run yet.");
     for (const key of OLD_STORY_KEYS) await api.v1.storyStorage.remove(key);
     await registerSettingsPanel();
     const enabled = await api.v1.storyStorage.get(KEYS.enabled) === true;

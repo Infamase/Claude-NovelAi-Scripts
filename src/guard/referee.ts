@@ -2,7 +2,7 @@
 // player character. It catches what patterns can't, such as an unattributed line of the player's
 // speech or an unmarked thought.
 
-const TIMEOUT_MS = 12000
+const TIMEOUT_MS = 10000
 const MAX_OUTPUT_TOKENS = 8
 
 export type RefereeInput = {
@@ -17,7 +17,20 @@ export type RefereeResult = {
   answer?: number
   raw: string
   ms: number
+  /** The model that answered. */
+  model?: string
   error?: string
+}
+
+type Attempt = { model: string; params: Omit<GenerationParams, 'model'> }
+
+/** The attempt that last worked, tried first from then on. */
+let working: Attempt | undefined
+let running = false
+
+/** Whether a referee call is in flight, so the guard can ignore any generation it causes. */
+export function isRefereeRunning(): boolean {
+  return running
 }
 
 export function refereePrompt({ storyTail, playerInput, sentences, strict }: RefereeInput): Message[] {
@@ -67,21 +80,69 @@ export function parseRefereeAnswer(raw: string, count: number): number | undefin
   return answer <= count ? answer : undefined
 }
 
-export async function askReferee(model: string, input: RefereeInput): Promise<RefereeResult> {
+/**
+ * Script generation officially supports GLM 4.6, so after the story's own model the referee tries
+ * GLM 4.6, then the story's model without the thinking switch. Whatever works is remembered.
+ */
+function attempts(storyModel: string): Attempt[] {
+  const base = { max_tokens: MAX_OUTPUT_TOKENS, temperature: 0 }
+  const list: Attempt[] = [
+    ...(working ? [working] : []),
+    { model: storyModel, params: { ...base, enable_thinking: false } },
+    { model: 'glm-4-6', params: { ...base, enable_thinking: false } },
+    { model: storyModel, params: base },
+  ]
+  const seen = new Set<string>()
+  return list.filter((a) => {
+    const key = JSON.stringify(a)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export async function askReferee(storyModel: string, input: RefereeInput): Promise<RefereeResult> {
   const started = Date.now()
   const elapsed = () => Date.now() - started
   if (api.v1.script.getAllowedOutput() < MAX_OUTPUT_TOKENS) {
-    return { raw: '', ms: 0, error: "the script's generation allowance is used up for now" }
+    return { raw: '', ms: 0, error: "the script's AI allowance is used up for now" }
   }
+  const messages = refereePrompt(input)
+  const errors: string[] = []
+  running = true
+  try {
+    for (const attempt of attempts(storyModel)) {
+      const label = `${attempt.model}${'enable_thinking' in attempt.params ? '' : ' without the thinking switch'}`
+      const outcome = await generateOnce(attempt, messages)
+      if (outcome.timedOut) {
+        // A hang won't get better with other settings; give up rather than make the player wait.
+        errors.push(`${label}: no answer within ${TIMEOUT_MS / 1000} s`)
+        break
+      }
+      if (outcome.error !== undefined) {
+        errors.push(`${label}: ${outcome.error}`)
+        continue
+      }
+      working = attempt
+      const raw = outcome.text ?? ''
+      const answer = parseRefereeAnswer(raw, input.sentences.length)
+      return answer === undefined
+        ? { raw, ms: elapsed(), model: attempt.model, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` }
+        : { answer, raw, ms: elapsed(), model: attempt.model }
+    }
+    return { raw: '', ms: elapsed(), error: errors.join('; ') }
+  } finally {
+    running = false
+  }
+}
+
+async function generateOnce(
+  attempt: Attempt,
+  messages: Message[],
+): Promise<{ text?: string; error?: string; timedOut?: boolean }> {
   const signal = await api.v1.createCancellationSignal()
   try {
-    const request = api.v1.generate(
-      refereePrompt(input),
-      { model, max_tokens: MAX_OUTPUT_TOKENS, temperature: 0, enable_thinking: false },
-      undefined,
-      'background',
-      signal,
-    )
+    const request = api.v1.generate(messages, { model: attempt.model, ...attempt.params }, undefined, 'background', signal)
     request.catch(() => {}) // a late failure after the timeout has nobody waiting for it
     // Never let a stuck call hold up the reply: give up after the timeout either way.
     const timeout = new Promise<'timeout'>((resolve) => {
@@ -90,16 +151,30 @@ export async function askReferee(model: string, input: RefereeInput): Promise<Re
     const response = await Promise.race([request, timeout])
     if (response === 'timeout') {
       signal.cancel().catch(() => {})
-      return { raw: '', ms: elapsed(), error: `no answer within ${TIMEOUT_MS / 1000} s` }
+      return { timedOut: true }
     }
-    const raw = response.choices[0]?.text ?? ''
-    const answer = parseRefereeAnswer(raw, input.sentences.length)
-    return answer === undefined
-      ? { raw, ms: elapsed(), error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` }
-      : { answer, raw, ms: elapsed() }
+    return { text: response.choices[0]?.text ?? '' }
   } catch (error) {
-    return { raw: '', ms: elapsed(), error: error instanceof Error ? error.message : String(error) }
+    return { error: describeError(error) }
   } finally {
     signal.dispose()
   }
+}
+
+/** Turns whatever was thrown into readable text. NovelAI may throw plain objects, not Errors. */
+export function describeError(error: unknown): string {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  if (error && typeof error === 'object') {
+    const fields = error as Record<string, unknown>
+    const message = [fields.message, fields.error, fields.reason, fields.statusText].find((v) => typeof v === 'string')
+    const status = fields.status ?? fields.statusCode ?? fields.code
+    if (typeof message === 'string') return status === undefined ? message : `${message} (${String(status)})`
+    try {
+      return JSON.stringify(error).slice(0, 300)
+    } catch {
+      // fall through
+    }
+  }
+  return String(error)
 }

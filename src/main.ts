@@ -8,6 +8,7 @@ import { setStoryPanelsVisible } from './ui/storyPanels.ts'
 async function init(): Promise<void> {
   await api.v1.storage.setIfAbsent(KEYS.referee, true)
   await api.v1.storyStorage.setIfAbsent(KEYS.lastTurnStatus, 'No turn checked yet.')
+  await api.v1.storyStorage.setIfAbsent(KEYS.refereeTest, 'Not run yet.')
   for (const key of OLD_STORY_KEYS) await api.v1.storyStorage.remove(key)
   await registerSettingsPanel()
   const enabled = (await api.v1.storyStorage.get(KEYS.enabled)) === true

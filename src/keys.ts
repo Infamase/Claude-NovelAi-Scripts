@@ -10,6 +10,8 @@ export const KEYS = {
   /** Story: summary and full details of the last guarded turn. */
   lastTurnStatus: 'tap.lastTurn.status',
   lastTurnDetails: 'tap.lastTurn.details',
+  /** Story: the result of the last "Test the referee" run. */
+  refereeTest: 'tap.refereeTest',
 } as const
 
 /** Keys used by earlier versions, removed on load. */

@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 1 built (v0.2.0)**: the turn guard. Waiting on playtesting.
+Status: **Phase 1 (v0.2.1)**: the turn guard, second round after the first playtest.
 
 ---
 
@@ -41,10 +41,14 @@ Status: **Phase 1 built (v0.2.0)**: the turn guard. Waiting on playtesting.
 This is the core feature. A script can't give the model a "dynamic length", and it can't stop a reply early either: Phase 0 showed that NovelAI then throws the whole reply away. So the guard lets the AI finish, checks the reply, and lets through only the part before it starts writing for your character. NovelAI shows replies all at once, so holding a reply until it is checked looks no different on screen.
 
 ### Layer 1 — Instruct (prevention)
-Before every reply the script adds short **narration rules** to the end of your latest input in the context (`onContextBuilt`). The rules tell the AI to:
+Before every reply the script marks your latest input in the context as **the player's action** and follows it with numbered **narration rules** (`onContextBuilt`). It also adds one line to the system prompt: this is a text adventure, the user plays "you", and the reply must never write for them. The rules tell the AI to:
 - write only what happens because of your input: how the world, the other characters and companions respond, and what your character sees and hears;
 - never write your character's speech, thoughts, conclusions, decisions or deliberate actions beyond what you typed (involuntary physical reactions are fine, except in strict mode);
-- stop as soon as your character would need to speak, act or decide, and end on the world: never ask what you do, offer choices or address you.
+- stop as soon as your character would need to speak, act or decide, and never continue a conversation on your behalf;
+- end on the world: never ask what you do, offer choices or address you;
+- keep it short: one to three short paragraphs.
+
+The first playtest showed why the wording matters: the model copies the story's own style far more than it follows a bracketed note, and a prose intro that narrates the player character a lot teaches it to keep doing that.
 
 Space for the rules is reserved first (`contextLimitReduction` in `onBeforeContextBuild`), so they can't push the context over its limit. They also show in NovelAI's Context viewer.
 
@@ -66,7 +70,7 @@ The script holds every streamed chunk back (`seenData: 0`) and decides on the fi
 
 Carrying out what you typed is allowed: after "You approach the dragon", the line "As you approach, she lifts her head" stays.
 
-If the very first sentence oversteps, nothing is added and a notification asks you to press Retry.
+If the very first sentence oversteps, nothing is added and the script asks the AI again automatically, up to twice. (NovelAI's Retry button would re-roll the previous turn here, because nothing new was added.)
 
 ### Layer 3 — Cap (Phase 4)
 Because a reply can't be stopped early, the AI keeps writing (out of sight) after an overstep until it finishes. A per-turn **maximum length** keeps that wait short.
@@ -122,6 +126,7 @@ Settings live in a **right-sidebar panel**, which keeps the bottom bar for Party
 - Referee: on/off
 - Strict: on/off
 - Last turn: what was kept and why, plus **Copy details**
+- Referee check: **Test the referee** runs it once on a made-up turn, outside any reply
 - Length cap: on/off, plus short and long sizes (Phase 4)
 
 ---
@@ -173,10 +178,15 @@ dist/text-adventure-plus.naiscript   ← the file you import
 - **Replies reach the document only when the generation ends**, and NovelAI shows them all at once.
 - **The final `onResponse` call is empty.** It doesn't resend the reply.
 
+### Phase 1 findings
+
+- **First playtest (v0.2.0):** the AI ignored the bracketed rules and wrote a whole conversation for the player character, copying the intro's style. The referee's AI call failed with an error the script showed as `[object Object]`. With Strict on, the first sentence ("You swallow hard…") was a reaction, so nothing was kept.
+- **v0.2.1 response:** plain numbered rules after the input marked as the player's action, plus a system-prompt line; readable referee errors; the referee tries the story's model, then GLM 4.6 (the API notes say script generation officially supports only GLM 4.6); a **Test the referee** button; automatic re-asking when nothing can be kept; swallowing, gulping, tensing and similar count as reactions.
+
 ## 11. Risks
 
 - **Hidden extra writing.** The AI keeps writing after an overstep until it finishes, so a long overstep means a longer wait. Layer 1 makes oversteps rarer, and Layer 3's cap (Phase 4) limits the wait.
-- **The referee hasn't run inside NovelAI yet.** If calling the AI from inside a reply fails, or takes over 12 seconds, the pattern rules take over and the Last turn report says why. Each check uses about 8 of the script's 2048 output tokens per 4 minutes.
+- **The referee hasn't worked inside NovelAI yet.** Its first call failed. If calling the AI from inside a reply turns out to be impossible, the fallback is to run the referee after the reply lands and trim the document (needs the `documentEdit` permission). Meanwhile, if it fails or takes over 10 seconds, the pattern rules take over and the Last turn report says why. Each check uses about 8 of the script's 2048 output tokens per 4 minutes.
 - **Accuracy.** The rules and the referee will sometimes cut too early or too late. The Last turn report shows exactly what was cut and why, and copied details become test cases.
 - **Persisted settings.** `generationParameters.update` saves into the story's settings, so the script always restores the original value, including on the next load if something went wrong mid-turn.
 - **Chat-endpoint models only** (Xialong, GLM 4.6). On models that use the older endpoint, these hooks don't run, so the guard does nothing there.

@@ -8,15 +8,15 @@ A NovelAI user script for Text Adventure mode on Xialong or GLM 4.6:
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.2.0, Phase 1 (the turn guard)
+## Status: v0.2.1, Phase 1 (the turn guard)
 
 How each turn works:
 
-1. **Rules for the AI.** Before every reply, short narration rules are added after your input in the context. You can see them in NovelAI's Context viewer.
+1. **Rules for the AI.** Before every reply, your input is marked as the player's action and followed by numbered narration rules, and the system prompt says this is a text adventure where you play "you". You can see all of it in NovelAI's Context viewer.
 2. **A check before anything appears.** The script holds the reply until the AI finishes. NovelAI shows replies all at once anyway, so this looks the same on screen. Then:
    - **pattern rules** catch the clear cases: your character speaking, thinking or deciding, and any form of "What do you do?";
    - **the referee**, a quick second AI call, catches the subtle ones, like an unattributed line of your speech or an unmarked thought.
-3. **The cut.** Only the text before the first overstep reaches the editor. It's a normal generation, so Undo and Retry work as usual. If the very first sentence oversteps, nothing is added and you're asked to press Retry.
+3. **The cut.** Only the text before the first overstep reaches the editor. It's a normal generation, so Undo and Retry work as usual. If the very first sentence oversteps, nothing is added and the script asks the AI again automatically, up to twice.
 
 The Party and Inventory tabs are still placeholders.
 
@@ -39,6 +39,7 @@ If a script ever makes NovelAI unusable, add `?noscript=true` to the end of the 
 - **Referee**: double-checks each reply with a quick AI call. It adds a second or two per turn and uses a small part of the script's AI allowance. On by default.
 - **Strict**: also cuts your character's physical reactions (a flinch, a cough). Off by default.
 - **Last turn**: what was kept, where the cut was and why. **Copy details** copies the whole reply sentence by sentence with the cut marked. Send it to Claude when a turn was cut wrongly or should have been cut.
+- **Referee check**: **Test the referee** runs the referee once on a made-up turn, outside any reply, and shows whether it could reach the AI.
 
 ## Development
 

@@ -1,6 +1,7 @@
 // The script's right-sidebar panel: the per-story switch, the turn guard's settings, and a report
 // on the last turn.
 
+import { runRefereeTest } from '../guard/turnGuard.ts'
 import { IDS, KEYS, logError } from '../keys.ts'
 import { setStoryPanelsVisible } from './storyPanels.ts'
 
@@ -60,6 +61,34 @@ export async function registerSettingsPanel(): Promise<void> {
               type: 'text',
               text: 'If a turn was cut wrongly, or should have been cut, copy its details and send them to Claude.',
               style: { opacity: 0.7, fontSize: '0.85em' },
+            },
+          ],
+        },
+        {
+          type: 'collapsibleSection',
+          title: 'Referee check',
+          iconId: 'check-circle',
+          initialCollapsed: true,
+          content: [
+            {
+              type: 'text',
+              text: 'Runs the referee once on a made-up turn, outside any reply, to check that it can reach the AI.',
+              style: { opacity: 0.7, fontSize: '0.85em' },
+            },
+            {
+              type: 'button',
+              text: 'Test the referee',
+              iconId: 'play',
+              disabledWhileCallbackRunning: true,
+              callback: () =>
+                runRefereeTest()
+                  .then((result) => api.v1.ui.toast(result, { type: result.includes('passed') ? 'success' : 'warning' }))
+                  .catch(logError),
+            },
+            {
+              type: 'text',
+              text: `{{story:${KEYS.refereeTest}}}`,
+              style: { whiteSpace: 'pre-wrap', fontSize: '0.9em' },
             },
           ],
         },

@@ -8,9 +8,12 @@
 
 import { KEYS, logError } from '../keys.ts'
 import { findOverstep, type Overstep } from './detector.ts'
-import { askReferee, type RefereeResult } from './referee.ts'
-import { narratorRules, turnContext, withRules } from './rules.ts'
+import { askReferee, isRefereeRunning, type RefereeInput, type RefereeResult } from './referee.ts'
+import { addedText, turnContext, withRules } from './rules.ts'
 import { isComplete, splitSentences, truncateChunks, type Sentence } from './text.ts'
+
+/** How many times in a row the guard asks again when nothing of a reply could be kept. */
+const MAX_AUTO_RETRIES = 2
 
 type Settings = { strict: boolean; referee: boolean }
 
@@ -18,6 +21,8 @@ export type Turn = Settings & {
   model: string
   playerInput?: string
   storyTail?: string
+  /** Set when nothing could be kept and the guard will ask again: which retry this will be. */
+  retryNumber?: number
 }
 
 export type Decision = {
@@ -31,19 +36,27 @@ export type Decision = {
 }
 
 const turns = new Map<string, Turn>()
-const ruleTokens = new Map<string, number>()
+const addedTokens = new Map<string, number>()
+/** Automatic retries since the player's last input or the last reply with something kept. */
+let retriesInARow = 0
 
 export function registerTurnGuard(): void {
-  api.v1.hooks.register('onGenerationRequested', async ({ continuityId, model, scriptInitiated, inlineGeneration, toolboxMode }) => {
-    if (scriptInitiated || inlineGeneration || toolboxMode || !(await isEnabled())) return
+  api.v1.hooks.register('onTextAdventureInput', () => {
+    retriesInARow = 0
+  })
+
+  api.v1.hooks.register('onGenerationRequested', async ({ continuityId, model, inlineGeneration, toolboxMode }) => {
+    // Script-started generations are guarded too (including the guard's own retries), apart from
+    // anything the referee's call might set off.
+    if (inlineGeneration || toolboxMode || isRefereeRunning() || !(await isEnabled())) return
     turns.set(continuityId, { model, ...(await readSettings()) })
   })
 
   api.v1.hooks.register('onBeforeContextBuild', async ({ continuityId, model, dryRun }) => {
     const settings = await settingsFor(continuityId, dryRun)
     if (!settings) return
-    // Make room for the rules, so adding them can't push the context over its limit.
-    return { contextLimitReduction: await rulesTokens(model, settings.strict) }
+    // Make room for what the guard adds, so it can't push the context over its limit.
+    return { contextLimitReduction: await addedTokenCount(model, settings.strict) }
   })
 
   api.v1.hooks.register('onContextBuilt', async ({ continuityId, dryRun, messages }) => {
@@ -51,7 +64,7 @@ export function registerTurnGuard(): void {
     if (!settings) return
     const turn = turns.get(continuityId)
     if (turn && !dryRun) Object.assign(turn, turnContext(messages))
-    return { messages: withRules(messages, narratorRules(settings.strict)) }
+    return { messages: withRules(messages, settings.strict) }
   })
 
   api.v1.hooks.register('onResponse', async ({ continuityId, text, final }) => {
@@ -59,13 +72,23 @@ export function registerTurnGuard(): void {
     if (!turn) return
     if (!final) return { seenData: 0 }
     const decision = await decide(turn, text.join(''))
+    if (keptNothing(decision)) {
+      if (retriesInARow < MAX_AUTO_RETRIES) turn.retryNumber = retriesInARow + 1
+    } else {
+      retriesInARow = 0
+    }
     report(turn, decision).catch(logError)
     if (decision.keep === decision.reply.length) return
     return { text: truncateChunks(text, decision.keep) }
   })
 
   api.v1.hooks.register('onGenerationEnd', ({ continuityId }) => {
+    const turn = turns.get(continuityId)
     turns.delete(continuityId)
+    if (turn?.retryNumber === undefined) return
+    retriesInARow = turn.retryNumber
+    // Start the retry after this hook returns, once the editor is free again.
+    api.v1.timers.setTimeout(() => api.v1.editor.generate().catch(logError), 50).catch(logError)
   })
 }
 
@@ -107,18 +130,28 @@ export async function decide(turn: Turn, reply: string): Promise<Decision> {
   return { reply, sentences, keep, cut, unfinishedTrimmed, referee }
 }
 
+function keptNothing(decision: Decision): boolean {
+  return decision.keep === 0 && decision.reply.trim() !== ''
+}
+
 async function report(turn: Turn, decision: Decision): Promise<void> {
-  await api.v1.storyStorage.set(KEYS.lastTurnStatus, sanitize(statusText(decision)))
+  await api.v1.storyStorage.set(KEYS.lastTurnStatus, sanitize(statusText(decision, turn)))
   await api.v1.storyStorage.set(KEYS.lastTurnDetails, sanitize(detailsText(turn, decision)))
-  if (decision.keep === 0 && decision.reply.trim()) {
+  if (!keptNothing(decision)) return
+  if (turn.retryNumber !== undefined) {
     await api.v1.ui.toast(
-      'Text Adventure+: the reply started by writing for your character, so nothing was added. Press Retry.',
+      `Text Adventure+: the reply wrote for your character from its first sentence, so it was dropped. Asking again (${turn.retryNumber} of ${MAX_AUTO_RETRIES})…`,
+      { type: 'info' },
+    )
+  } else {
+    await api.v1.ui.toast(
+      `Text Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. Try rewording your action${turn.strict ? ', or turn off Strict' : ''}.`,
       { type: 'warning' },
     )
   }
 }
 
-export function statusText(d: Decision): string {
+export function statusText(d: Decision, turn?: Pick<Turn, 'retryNumber'>): string {
   if (!d.reply.trim()) return 'Last turn: the AI wrote nothing.'
   const total = d.sentences.length
   const kept = d.sentences.filter((s) => s.start < d.keep).length
@@ -131,16 +164,20 @@ export function statusText(d: Decision): string {
         : `Last turn: kept ${kept} of ${total} sentences. Cut from: ${sentence}`,
       `Why: ${d.cut.reason} (found by the ${d.cut.by === 'referee' ? 'referee' : 'pattern rules'}).`,
     )
+    if (kept === 0 && turn?.retryNumber !== undefined) {
+      lines.push(`Asking the AI again automatically (${turn.retryNumber} of ${MAX_AUTO_RETRIES}).`)
+    }
   } else if (d.unfinishedTrimmed) {
     lines.push(`Last turn: kept ${kept} of ${total} sentences, minus an unfinished last sentence.`)
   } else {
     lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? '' : 's'}).`)
   }
   if (d.referee) {
+    const seconds = `${(d.referee.ms / 1000).toFixed(1)} s`
     lines.push(
       d.referee.error
         ? `Referee: unavailable (${d.referee.error}), so the pattern rules checked for actions too.`
-        : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : 'no problems'} (${(d.referee.ms / 1000).toFixed(1)} s).`,
+        : `Referee: ${d.referee.answer ? `flagged sentence ${d.referee.answer}` : 'no problems'} (${d.referee.model}, ${seconds}).`,
     )
   }
   return lines.join('\n')
@@ -155,12 +192,34 @@ function detailsText(turn: Turn, d: Decision): string {
     `Text Adventure+ last turn (v${api.v1.script.version})`,
     `Model: ${turn.model} | strict: ${turn.strict ? 'on' : 'off'} | referee: ${turn.referee ? 'on' : 'off'}`,
     `Player input: ${turn.playerInput === undefined ? '(none)' : quote(turn.playerInput, 400)}`,
-    statusText(d),
+    statusText(d, turn),
     d.referee ? `Referee answer: ${quote(d.referee.raw, 40)}` : 'Referee: not asked',
     'Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):',
     ...marks,
     `Story just before: ${quote(turn.storyTail ?? '', 400)}`,
   ].join('\n')
+}
+
+/** A made-up turn whose answer is known: sentence 2 has the player character speak. */
+const REFEREE_SAMPLE: RefereeInput = {
+  storyTail: 'The dragon opens one violet eye. "Awake, are we?"',
+  playerInput: 'You ask "Who are you?"',
+  sentences: ['The dragon lifts her head from the pile of books.', '"Where am I?" you whisper.', 'She laughs, a sound like rolling thunder.'],
+  strict: false,
+}
+
+/** Runs the referee once on a sample, outside any reply, and records the result. */
+export async function runRefereeTest(): Promise<string> {
+  const settings = await api.v1.generationParameters.get().catch(() => undefined)
+  const result = await askReferee(settings?.model ?? 'glm-4-6', REFEREE_SAMPLE)
+  const where = `${result.model}, ${(result.ms / 1000).toFixed(1)} s`
+  const text = result.error
+    ? `Referee test failed: ${result.error}`
+    : result.answer === 2
+      ? `Referee test passed: it found the right sentence (${where}).`
+      : `Referee test: it works, but answered ${result.answer} where 2 was right (${where}).`
+  await api.v1.storyStorage.set(KEYS.refereeTest, sanitize(text))
+  return text
 }
 
 async function isEnabled(): Promise<boolean> {
@@ -183,18 +242,18 @@ async function settingsFor(continuityId: string, dryRun: boolean): Promise<Setti
   return undefined
 }
 
-async function rulesTokens(model: string, strict: boolean): Promise<number> {
+async function addedTokenCount(model: string, strict: boolean): Promise<number> {
   const key = `${model}|${strict}`
-  let count = ruleTokens.get(key)
+  let count = addedTokens.get(key)
   if (count === undefined) {
-    const rules = `\n\n${narratorRules(strict)}`
+    const text = addedText(strict)
     count = await api.v1.tokenizer
-      .encode(rules, model)
+      .encode(text, model)
       .then((tokens) => tokens.length)
-      .catch(() => Math.ceil(rules.length / 3))
-    ruleTokens.set(key, count)
+      .catch(() => Math.ceil(text.length / 3))
+    addedTokens.set(key, count)
   }
-  return count + 4
+  return count + 8
 }
 
 /** JSON-quotes text (shortened from the end if needed), so whitespace stays visible. */
@@ -203,6 +262,6 @@ function quote(text: string, max: number): string {
 }
 
 /** The sidebar shows these through {{storage}} templates, so keep story text from looking like one. */
-function sanitize(text: string): string {
+export function sanitize(text: string): string {
   return text.replace(/\{\{/g, '{ {')
 }

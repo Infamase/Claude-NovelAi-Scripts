@@ -78,6 +78,10 @@ describe('findOverstep', () => {
     const text = 'The ale burns your throat, and you cough.'
     assert.equal(cutAt(text), null)
     assert.match(cutAt(text, { strict: true, actions: false })?.reason ?? '', /strict mode/)
+    // From playtesting: swallowing hard is a reaction, not a deliberate action.
+    const swallow = 'You swallow hard, trying to speak, but your throat is dry.'
+    assert.equal(cutAt(swallow, { ...REACTIONS, playerInput: 'You restate "Speak…with?"' }), null)
+    assert.match(cutAt(swallow, { strict: true, actions: true })?.reason ?? '', /strict mode/)
   })
 
   it('leaves unmarked thoughts and unattributed lines to the referee', () => {
