@@ -1,5 +1,5 @@
-// Story Adventure+'s storage keys and its own UI extension ids. The tabs (Player, Party, Inventory)
-// share their keys and ids with Text Adventure+; each script has its own storage and extensions.
+// Story Adventure+'s storage keys and its own UI extension ids. The tabs (Setting, Player, Party,
+// Inventory) share their keys and ids with Text Adventure+; each script has its own storage and extensions.
 
 export const KEYS = {
   /** Story: whether the script is on for this story. */

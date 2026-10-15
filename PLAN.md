@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish. A Story mode fork, **Story Adventure+**, is built too (v0.1.0); see section 13.
+Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish. A Story mode fork, **Story Adventure+**, is built too (v0.2.0); see section 13.
 
 ---
 
@@ -223,11 +223,12 @@ A second script in this repo for Story mode. It drops the turn guard and keeps t
 | Keeping to it | **Catch slips**, on by default: a pattern check cuts a reply where its narration slips into the past tense, the first person or the protagonist's name, and asks again (up to twice) if nothing is left. |
 | Writing quality | A **writing guide** in the system prompt against common AI habits and stock phrases. Editable in the sidebar, with Reset to default; an unedited guide updates with new versions. |
 | Player character | A **Player** tab: name, pronouns, who you are, appearance, status, skills, notes. |
+| Setting | A **Setting** tab (v0.2.0): world, current location, time period, notes, and a "keep to the world's canon" switch for worlds from books, games and films. Sent first in the game state. |
 | Name | **Story Adventure+** (its own script id, imported separately). |
 
 ### How it works
 
-- **Context.** `onContextBuilt` appends the point-of-view rule and the guide to the system message, and puts the game state (player, party, inventory) and the reminder in the last user message (the memory), before NovelAI's closing "Write.". Room is reserved with `contextLimitReduction`. The Context viewer shows all of it.
+- **Context.** `onContextBuilt` appends the point-of-view rule and the guide to the system message, and puts the game state (setting, player, party, inventory) and the reminder in the last user message (the memory), before NovelAI's closing "Write.". Room is reserved with `contextLimitReduction`. The Context viewer shows all of it.
 - **Catch slips.** Text Adventure+ showed that stopping a reply loses it, so this check holds text back with `seenData` too, but it holds back less: sentences that are clearly fine go through as they arrive, and only from the first sentence that might start a slip does the rest wait for the end. On the final call the reply is cut before the first slip.
   - First person ("I", "me", "my") or the protagonist's name as a subject ("Hunter walks") in the narration: a slip right there.
   - Past tense: counted per sentence from verb forms after pronouns ("you stepped", "she said"), "was"/"were"/"had", and common narration verbs. A run counts as a slip only if at least two sentences are past, the past outnumbers the present from there on, and the reply is still in the past at its end. Memories ("You remember…") are exempt, and so is backstory that returns to the present.

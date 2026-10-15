@@ -20,6 +20,7 @@ export const OLD_STORY_KEYS = ['tap.diag.armed', 'tap.diag.report', 'tap.diag.st
 /** UI extension ids. Each script has its own extensions, so Story Adventure+ uses the same tab ids. */
 export const IDS = {
   settingsPanel: 'tap-settings',
+  settingPanel: 'tap-setting',
   playerPanel: 'tap-player',
   partyPanel: 'tap-party',
   inventoryPanel: 'tap-inventory',

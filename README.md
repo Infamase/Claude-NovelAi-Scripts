@@ -7,7 +7,7 @@ Two NovelAI user scripts for chat-endpoint models (**Xialong** or **GLM 4.6**). 
 | Mode | Text Adventure | Story |
 | File | [`dist/text-adventure-plus.naiscript`](dist/text-adventure-plus.naiscript) | [`dist/story-adventure-plus.naiscript`](dist/story-adventure-plus.naiscript) |
 | What it does to replies | Stops at your turn: no writing for your character, no "What do you do?" | Keeps the story in second person, present tense, written to a guide against AI clichés |
-| Bottom-bar tabs | Party, Inventory | Player, Party, Inventory |
+| Bottom-bar tabs | Party, Inventory | Setting, Player, Party, Inventory |
 
 See [PLAN.md](PLAN.md) for the design and roadmap.
 
@@ -36,14 +36,14 @@ How each turn works:
 
 ---
 
-## Story Adventure+ (v0.1.0)
+## Story Adventure+ (v0.2.0)
 
 For Story mode: you and the AI write the story together, and the AI may write what "you" do. There is no turn guard.
 
 - **Second person, present tense.** The system prompt gets a point-of-view rule, and a one-line reminder goes just before the story, where the AI reads it last.
 - **Catch slips.** Each reply is checked as it comes in. It's cut where its narration slips into the past tense ("You stepped inside. The room was dark."), the first person ("I step back") or your character's name ("Hunter steps back"). If nothing is left, the script asks the AI again, up to twice. Dialogue and *italic thoughts* may use any person and tense. A memory ("You remember the night…") or a bit of backstory that returns to the present is not a slip.
 - **A writing guide** in the system prompt: concrete detail, plain strong verbs, varied rhythm, dialogue that sounds like people, characters with their own wants, no summarizing or moralizing endings, and a list of stock phrases to avoid ("a breath you didn't know you were holding", "barely above a whisper", "a testament to"…). You can edit it in the sidebar.
-- **Player**, **Party** and **Inventory** tabs in the bottom bar, fed into the story context.
+- **Setting**, **Player**, **Party** and **Inventory** tabs in the bottom bar, fed into the story context.
 
 ### Settings (right sidebar → Story Adventure+)
 
@@ -60,6 +60,16 @@ The model copies the story's own style strongly, so start the story in second pe
 ## The tabs (bottom bar)
 
 The tabs appear only in stories where the script is enabled. Update them yourself as things change in the story; nothing is tracked automatically yet. With each reply, the filled-in tabs are sent as one "Game state" block. Each tab has a **What the AI sees** preview and a switch to stop sending it.
+
+### Setting (Story Adventure+)
+
+- **World**: the world or universe ("the Mass Effect universe", or your own world's name and a few words about it).
+- **Current location** ("Illium, the Nos Astra trading floor"). Update it as you travel.
+- **Time period** ("2186, during the events of Mass Effect 3").
+- **Keep to the world's canon** (on by default): for a world from a book, game, film or show, the AI is told to keep to its lore, history, technology and characters, except where your notes say otherwise. It's only sent when World is filled in.
+- **Notes**: tone, rules of the world, what has happened so far, and anything that differs from canon.
+
+It goes first in the game state, so the AI reads where and when before who.
 
 ### Player (Story Adventure+)
 
@@ -83,7 +93,7 @@ Companions speak and act for themselves.
 - **Price guide**: typical prices in your currency, one per line, like `a hot meal: 2`. It starts with a typical fantasy scale; adjust it to your world. The AI is told to keep every price in line with it, so a rug costs about 30, not 300.
 - **Items**: name, quantity, **Equipped**, and an optional note that the AI sees while the item is equipped (`notched blade`).
 
-Where the block goes: in Text Adventure+, right after your action, before the narration rules. In Story Adventure+, just before the story, after the memory.
+Where the block goes: in Text Adventure+, right after your action, before the narration rules. In Story Adventure+, just before the story, after the memory, in the order Setting, Player, Party, Inventory.
 
 ---
 

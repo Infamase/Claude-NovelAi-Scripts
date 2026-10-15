@@ -4,6 +4,7 @@ import { installMockApi, tokenize } from '../helpers/mockApi.ts'
 import { INV, initInventory } from '../../src/state/inventory.ts'
 import { initParty } from '../../src/state/party.ts'
 import { PLAYER, initPlayer } from '../../src/state/player.ts'
+import { SETTING, initSetting } from '../../src/state/setting.ts'
 import { KEYS } from '../../src/story/keys.ts'
 import { DEFAULT_GUIDE, POV_REMINDER, POV_RULE } from '../../src/story/prompt.ts'
 import { registerStoryHooks, releasable } from '../../src/story/storyGuard.ts'
@@ -15,6 +16,7 @@ const OPENING = 'You stand at the edge of the clearing. The fire is low.'
 async function setup(settings: { enabled?: boolean; pov?: boolean; check?: boolean; guide?: string | false } = {}) {
   const mock = installMockApi()
   registerStoryHooks()
+  await initSetting()
   await initPlayer()
   await initParty()
   await initInventory()
@@ -54,15 +56,17 @@ describe('story hooks', () => {
     assert.ok((mock.last.contextLimitReduction ?? 0) > 300)
   })
 
-  it('send the player, party and inventory before the reminder', async () => {
+  it('send the setting, player, party and inventory before the reminder', async () => {
     const mock = await setup()
+    mock.story.set(SETTING.field('world'), 'the Mass Effect universe')
+    mock.story.set(SETTING.field('location'), 'Illium')
     mock.story.set(PLAYER.field('name'), 'Hunter')
     mock.story.set(PLAYER.field('role'), 'human ranger')
     mock.story.set(INV.amount, 12)
     await continueStory(mock, ' A twig snaps.')
     assert.match(
       mock.last.context?.[1].content ?? '',
-      /\*\*\*\n\nGame state \(keep the story consistent with it\):\n- The protagonist \("you"\): Hunter, human ranger\. Status: Healthy\.\n- Money: 12 gold\.\n.*\n- Carrying: nothing\.\n\nContinue the story from where it stops, in second person, present tense\.\n\nWrite\.$/,
+      /\*\*\*\n\nGame state \(keep the story consistent with it\):\n- Setting: the Mass Effect universe\. Current location: Illium\. Keep to the established canon of this world \(its lore, history, technology and characters\)\.\n- The protagonist \("you"\): Hunter, human ranger\. Status: Healthy\.\n- Money: 12 gold\.\n.*\n- Carrying: nothing\.\n\nContinue the story from where it stops, in second person, present tense\.\n\nWrite\.$/,
     )
   })
 

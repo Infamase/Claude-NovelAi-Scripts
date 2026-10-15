@@ -3,10 +3,10 @@ compatibilityVersion: naiscript-1.0
 id: 49fb05e0-8e3c-4f0e-a7f0-eaea528b70c5
 name: Story Adventure+
 createdAt: 1792084608383
-updatedAt: 1792085232832
-version: 0.1.0
+updatedAt: 1792090415163
+version: 0.2.0
 author: Infamase
-description: Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Player, Party and Inventory tabs that feed the story context.
+description: Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Setting, Player, Party and Inventory tabs that feed the story context.
 memoryLimit: 8
 ---*/
 "use strict";
@@ -14,6 +14,7 @@ memoryLimit: 8
   // src/keys.ts
   var IDS = {
     settingsPanel: "tap-settings",
+    settingPanel: "tap-setting",
     playerPanel: "tap-player",
     partyPanel: "tap-party",
     inventoryPanel: "tap-inventory"
@@ -238,6 +239,52 @@ memoryLimit: 8
     return [parts.join(" ")];
   }
   function sentences(value) {
+    return value.split("\n").map((line) => line.trim()).filter((line) => line !== "").map((line) => /[.!?…]$/.test(line) ? line : `${line}.`).join(" ");
+  }
+
+  // src/state/setting.ts
+  var SETTING = {
+    share: "tap.setting.share",
+    canon: "tap.setting.canon",
+    /** What the AI sees, for the tab's preview. */
+    preview: "tap.setting.preview",
+    field: (field) => `tap.setting.${field}`
+  };
+  var TEXT_FIELDS = ["world", "location", "time", "notes"];
+  async function initSetting() {
+    const s = api.v1.storyStorage;
+    await s.setIfAbsent(SETTING.share, true);
+    await s.setIfAbsent(SETTING.canon, true);
+    for (const field of TEXT_FIELDS) await s.setIfAbsent(SETTING.field(field), "");
+  }
+  async function readSetting() {
+    const s = api.v1.storyStorage;
+    return {
+      share: await s.get(SETTING.share) !== false,
+      world: text(await s.get(SETTING.field("world"))).trim(),
+      location: text(await s.get(SETTING.field("location"))).trim(),
+      time: text(await s.get(SETTING.field("time"))).trim(),
+      canon: await s.get(SETTING.canon) !== false,
+      notes: text(await s.get(SETTING.field("notes"))).trim()
+    };
+  }
+  function settingLines(setting) {
+    if (!setting.share) return [];
+    const { world, location, time, canon, notes } = setting;
+    if (![world, location, time, notes].some((value) => value !== "")) return [];
+    const parts = [];
+    if (world) parts.push(`Setting: ${sentences2(world)}`);
+    if (location) parts.push(`Current location: ${sentences2(location)}`);
+    if (time) parts.push(`Time: ${sentences2(time)}`);
+    if (world && canon) {
+      parts.push(
+        `Keep to the established canon of this world (its lore, history, technology and characters)${notes ? ", except where the notes say otherwise" : ""}.`
+      );
+    }
+    if (notes) parts.push(`Notes: ${sentences2(notes)}`);
+    return [parts.join(" ")];
+  }
+  function sentences2(value) {
     return value.split("\n").map((line) => line.trim()).filter((line) => line !== "").map((line) => /[.!?…]$/.test(line) ? line : `${line}.`).join(" ");
   }
 
@@ -646,11 +693,84 @@ memoryLimit: 8
     await api.v1.storyStorage.set(PLAYER.preview, forTemplate(text2));
   }
 
+  // src/ui/settingPanel.ts
+  var schedulePreview4 = debounced(() => updateSettingPreview());
+  async function settingPanel() {
+    updateSettingPreview().catch(logError);
+    const edited = () => schedulePreview4();
+    const key = (field) => `story:${SETTING.field(field)}`;
+    return {
+      type: "scriptPanel",
+      id: IDS.settingPanel,
+      name: "Setting",
+      iconId: "globe",
+      content: [
+        {
+          type: "checkboxInput",
+          label: "Tell the AI about the setting",
+          storageKey: `story:${SETTING.share}`,
+          onChange: edited
+        },
+        {
+          type: "text",
+          text: "Where and when the story takes place. Update the location as you travel.",
+          style: MUTED
+        },
+        {
+          type: "textInput",
+          label: "World",
+          placeholder: "the Mass Effect universe",
+          storageKey: key("world"),
+          onChange: edited
+        },
+        {
+          type: "textInput",
+          label: "Current location",
+          placeholder: "Illium, the Nos Astra trading floor",
+          storageKey: key("location"),
+          onChange: edited
+        },
+        {
+          type: "textInput",
+          label: "Time period",
+          placeholder: "2186, during the events of Mass Effect 3",
+          storageKey: key("time"),
+          onChange: edited
+        },
+        {
+          type: "checkboxInput",
+          label: "Keep to the world's canon",
+          storageKey: `story:${SETTING.canon}`,
+          onChange: edited
+        },
+        {
+          type: "text",
+          text: "For a world from a book, game, film or show: the AI keeps to its lore, history, technology and characters, except where your notes say otherwise.",
+          style: MUTED
+        },
+        {
+          type: "multilineTextInput",
+          label: "Notes",
+          placeholder: "Tone, rules of the world, what has happened so far, and anything that differs from canon",
+          storageKey: key("notes"),
+          onChange: edited
+        },
+        previewSection(SETTING.preview)
+      ]
+    };
+  }
+  async function updateSettingPreview(setting) {
+    const current = setting ?? await readSetting();
+    const block = gameStateBlock(settingLines(current));
+    const text2 = !current.share ? "Nothing: sending the setting is turned off above." : block ?? "Nothing yet. Fill in the world, location or time, and it will be sent with every reply.";
+    await api.v1.storyStorage.set(SETTING.preview, forTemplate(text2));
+  }
+
   // src/story/panels.ts
   var STORY_PARTY_NOTE = 'The people travelling with you. Untick "In party" for someone who is away: they stay listed but are not sent.';
   var panels = panelSet(
-    [playerPanel, (rebuild) => partyPanel(rebuild, STORY_PARTY_NOTE), inventoryPanel],
-    [IDS.playerPanel, IDS.partyPanel, IDS.inventoryPanel]
+    [settingPanel, playerPanel, (rebuild) => partyPanel(rebuild, STORY_PARTY_NOTE), inventoryPanel],
+    [IDS.settingPanel, IDS.playerPanel, IDS.partyPanel, IDS.inventoryPanel]
   );
   var setStoryPanelsVisible = panels.setVisible;
 
@@ -732,7 +852,7 @@ ${second}` : second;
           },
           {
             type: "text",
-            text: "When enabled, Player, Party and Inventory tabs appear above the bottom controls, and the settings below apply to this story.",
+            text: "When enabled, Setting, Player, Party and Inventory tabs appear above the bottom controls, and the settings below apply to this story.",
             style: MUTED2
           },
           { type: "checkboxInput", label: "Second person, present tense", storageKey: KEYS.pov },
@@ -872,15 +992,15 @@ ${second}` : second;
     return -1;
   }
   function splitSentences(text2) {
-    const sentences2 = [];
+    const sentences3 = [];
     let start = 0;
     while (start < text2.length && text2.slice(start).trim() !== "") {
       const end = findSentenceEnd(text2.slice(start));
       const stop = end < 0 ? text2.length : start + end;
-      sentences2.push({ start, end: stop, text: text2.slice(start, stop) });
+      sentences3.push({ start, end: stop, text: text2.slice(start, stop) });
       start = stop;
     }
-    return sentences2;
+    return sentences3;
   }
   function quoteMask(text2) {
     const mask = [];
@@ -995,11 +1115,11 @@ ${second}` : second;
     if (open === "'") return ch === "'" && !/\s/.test(before) && !/\p{L}/u.test(after);
     return ch === open && !/\s/.test(before);
   }
-  function checkSentences(text2, sentences2, playerName = "") {
+  function checkSentences(text2, sentences3, playerName = "") {
     const mask = speechMask(text2);
     const nameRe = namePattern(playerName);
     let inMemory = false;
-    return sentences2.map((sentence2) => {
+    return sentences3.map((sentence2) => {
       let narration = "";
       for (let i = sentence2.start; i < sentence2.end; i++) narration += mask[i] ? " " : text2[i];
       const check = checkNarration(narration, nameRe);
@@ -1149,26 +1269,27 @@ ${second}` : second;
   }
   async function gameStateText() {
     return gameStateBlock([
+      ...settingLines(await readSetting()),
       ...playerLines(await readPlayer()),
       ...partyLines(await readParty()),
       ...inventoryLines(await readInventory())
     ]);
   }
   function decideSlips(reply, name = "") {
-    const sentences2 = splitSentences(reply);
-    const checks = checkSentences(reply, sentences2, name);
+    const sentences3 = splitSentences(reply);
+    const checks = checkSentences(reply, sentences3, name);
     const slip = findSlip(checks);
-    let keep = slip ? sentences2[slip.index].start : reply.length;
+    let keep = slip ? sentences3[slip.index].start : reply.length;
     if (slip) while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
-    return { reply, sentences: sentences2, checks, slip, keep };
+    return { reply, sentences: sentences3, checks, slip, keep };
   }
   function releasable(reply, name = "") {
-    const sentences2 = splitSentences(reply);
-    if (sentences2.length === 0) return 0;
-    const checks = checkSentences(reply, sentences2, name);
+    const sentences3 = splitSentences(reply);
+    if (sentences3.length === 0) return 0;
+    const checks = checkSentences(reply, sentences3, name);
     let index = 0;
-    while (index < sentences2.length - 1 && !mightSlip(checks[index])) index++;
-    return sentences2[index].start;
+    while (index < sentences3.length - 1 && !mightSlip(checks[index])) index++;
+    return sentences3[index].start;
   }
   function chunksWithin(chunks, length) {
     let total = 0;
@@ -1275,6 +1396,7 @@ ${second}` : second;
     await api.v1.storage.setIfAbsent(KEYS.useGuide, true);
     await initGuide();
     await api.v1.storyStorage.setIfAbsent(KEYS.lastReplyStatus, "No reply checked yet.");
+    await initSetting();
     await initPlayer();
     await initParty();
     await initInventory();

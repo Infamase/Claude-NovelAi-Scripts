@@ -19,9 +19,9 @@
       "entry": "src/story/main.ts",
       "id": "49fb05e0-8e3c-4f0e-a7f0-eaea528b70c5",
       "name": "Story Adventure+",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": "Infamase",
-      "description": "Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Player, Party and Inventory tabs that feed the story context.",
+      "description": "Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Setting, Player, Party and Inventory tabs that feed the story context.",
       "createdAt": 1792084608383,
       "memoryLimit": 8,
       "output": "dist/story-adventure-plus.naiscript"

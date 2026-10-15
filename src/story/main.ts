@@ -4,6 +4,7 @@ import { logError } from '../keys.ts'
 import { initInventory } from '../state/inventory.ts'
 import { initParty } from '../state/party.ts'
 import { initPlayer } from '../state/player.ts'
+import { initSetting } from '../state/setting.ts'
 import { KEYS } from './keys.ts'
 import { setStoryPanelsVisible } from './panels.ts'
 import { initGuide, registerSettingsPanel } from './settingsPanel.ts'
@@ -15,6 +16,7 @@ async function init(): Promise<void> {
   await api.v1.storage.setIfAbsent(KEYS.useGuide, true)
   await initGuide()
   await api.v1.storyStorage.setIfAbsent(KEYS.lastReplyStatus, 'No reply checked yet.')
+  await initSetting()
   await initPlayer()
   await initParty()
   await initInventory()

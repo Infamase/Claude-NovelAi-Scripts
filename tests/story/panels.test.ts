@@ -5,6 +5,7 @@ import { IDS } from '../../src/keys.ts'
 import { initInventory } from '../../src/state/inventory.ts'
 import { initParty } from '../../src/state/party.ts'
 import { PLAYER, initPlayer } from '../../src/state/player.ts'
+import { SETTING, initSetting } from '../../src/state/setting.ts'
 import { KEYS, STORY_IDS } from '../../src/story/keys.ts'
 import { STORY_PARTY_NOTE, setStoryPanelsVisible } from '../../src/story/panels.ts'
 import { DEFAULT_GUIDE } from '../../src/story/prompt.ts'
@@ -29,6 +30,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 async function setup() {
   const mock = installMockApi()
+  await initSetting()
   await initPlayer()
   await initParty()
   await initInventory()
@@ -39,12 +41,18 @@ async function setup() {
 describe('Story Adventure+ panels', () => {
   afterEach(() => setStoryPanelsVisible(false))
 
-  it('shows Player, Party and Inventory tabs when enabled, keeping the sidebar panel', async () => {
+  it('shows Setting, Player, Party and Inventory tabs when enabled, keeping the sidebar panel', async () => {
     const mock = await setup()
     const enable = parts(mock, STORY_IDS.settingsPanel).find((p) => p.storageKey === `story:${KEYS.enabled}`)
     enable.onChange(true)
     await settle()
-    assert.deepEqual([...mock.extensions.keys()], [STORY_IDS.settingsPanel, IDS.playerPanel, IDS.partyPanel, IDS.inventoryPanel])
+    assert.deepEqual([...mock.extensions.keys()], [
+      STORY_IDS.settingsPanel,
+      IDS.settingPanel,
+      IDS.playerPanel,
+      IDS.partyPanel,
+      IDS.inventoryPanel,
+    ])
     assert.ok(parts(mock, IDS.partyPanel).some((p) => p.text === STORY_PARTY_NOTE), 'the party note fits story mode')
 
     enable.onChange(false)
@@ -79,6 +87,30 @@ describe('Story Adventure+ panels', () => {
     assert.equal(
       mock.story.get(PLAYER.preview),
       'Game state (keep the story consistent with it):\n- The protagonist ("you"): Hunter (he/him). Status: Healthy.',
+    )
+  })
+})
+
+describe('Setting tab', () => {
+  afterEach(() => setStoryPanelsVisible(false))
+
+  it('has the world, location, time, canon and notes fields, and previews them', async () => {
+    const mock = await setup()
+    await setStoryPanelsVisible(true)
+    const all = parts(mock, IDS.settingPanel)
+    const labels = all.map((p) => p.label ?? p.title ?? p.text)
+    for (const label of ['Tell the AI about the setting', 'World', 'Current location', 'Time period', "Keep to the world's canon", 'Notes', 'What the AI sees']) {
+      assert.ok(labels.includes(label), label)
+    }
+    assert.match(String(mock.story.get(SETTING.preview)), /^Nothing yet/)
+
+    mock.story.set(SETTING.field('world'), 'the Mass Effect universe')
+    mock.story.set(SETTING.field('location'), 'Illium')
+    all.find((p) => p.label === 'World').onChange('the Mass Effect universe')
+    await mock.runTimers()
+    assert.equal(
+      mock.story.get(SETTING.preview),
+      'Game state (keep the story consistent with it):\n- Setting: the Mass Effect universe. Current location: Illium. Keep to the established canon of this world (its lore, history, technology and characters).',
     )
   })
 })

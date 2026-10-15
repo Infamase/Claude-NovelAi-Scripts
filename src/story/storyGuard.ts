@@ -1,5 +1,6 @@
 // Story Adventure+'s hooks. Before each reply they add the point-of-view rule and the writing guide
-// to the system prompt, and the game state with a reminder just before the story. With "Catch slips"
+// to the system prompt, and the game state (setting, player, party, inventory) with a reminder just
+// before the story. With "Catch slips"
 // on, they also check the reply as it streams in and keep back the part that slips out of second
 // person, present tense.
 //
@@ -13,6 +14,7 @@ import { gameStateBlock } from '../state/gameState.ts'
 import { inventoryLines, readInventory } from '../state/inventory.ts'
 import { partyLines, readParty } from '../state/party.ts'
 import { playerLines, readPlayer } from '../state/player.ts'
+import { readSetting, settingLines } from '../state/setting.ts'
 import { text as textOf } from '../state/store.ts'
 import { sliceChunks, splitSentences, type Sentence } from '../guard/text.ts'
 import { KEYS } from './keys.ts'
@@ -117,9 +119,10 @@ export function registerStoryHooks(): void {
   })
 }
 
-/** Player, party, then inventory, as the block the AI sees, or undefined if there is nothing to tell. */
+/** Setting, player, party, then inventory, as the block the AI sees, or undefined if there is nothing to tell. */
 export async function gameStateText(): Promise<string | undefined> {
   return gameStateBlock([
+    ...settingLines(await readSetting()),
     ...playerLines(await readPlayer()),
     ...partyLines(await readParty()),
     ...inventoryLines(await readInventory()),

@@ -27,7 +27,7 @@ export async function registerSettingsPanel(): Promise<void> {
         },
         {
           type: 'text',
-          text: 'When enabled, Player, Party and Inventory tabs appear above the bottom controls, and the settings below apply to this story.',
+          text: 'When enabled, Setting, Player, Party and Inventory tabs appear above the bottom controls, and the settings below apply to this story.',
           style: MUTED,
         },
         { type: 'checkboxInput', label: 'Second person, present tense', storageKey: KEYS.pov },
