@@ -4,6 +4,9 @@
 // - unseen chunks (seenData) are resent on the next call; on the final call everything is placed;
 // - a script stop (stopGeneration in onResponse) discards everything the generation produced;
 // - the context is system, user (memory), assistant (story), user (latest inputs), empty assistant.
+//
+// Story mode (playStory) is modeled on the same layout without the inputs: the reply continues the
+// story's last paragraph. That layout is an assumption until a story-mode playtest confirms it.
 
 type Hooks = Record<string, (params: any) => any>
 type Section = { text: string; source?: string; origin: { data: string }[] }
@@ -28,7 +31,7 @@ export function installMockApi(options: MockOptions = {}) {
   const extensions = new Map<string, any>()
   let unnamed = 0
   const keyOf = (extension: any) => extension.id ?? `unnamed-${unnamed++}`
-  const last: { context?: Message[]; contextLimitReduction?: number } = {}
+  const last: { context?: Message[]; contextLimitReduction?: number; placements?: string[] } = {}
 
   const storage = (map: Map<string, unknown>) => ({
     get: async (key: string) => (map.has(key) ? structuredClone(map.get(key)) : undefined),
@@ -43,7 +46,7 @@ export function installMockApi(options: MockOptions = {}) {
 
   ;(globalThis as any).api = {
     v1: {
-      script: { version: '0.0.0-test', getAllowedOutput: () => 2048 },
+      script: { name: 'Test Script', version: '0.0.0-test', getAllowedOutput: () => 2048 },
       log: () => {},
       uuid: () => crypto.randomUUID(),
       error: (...messages: unknown[]) => console.error(...messages),
@@ -87,23 +90,26 @@ export function installMockApi(options: MockOptions = {}) {
   }
 
   function place(text: string) {
+    last.placements?.push(text)
     const [first, ...rest] = text.split('\n')
     sections[sections.length - 1].text += first
     for (const line of rest) sections.push({ text: line, source: 'story', origin: [{ data: 'ai' }] })
   }
 
   /** Runs one generation through the hooks, the way NovelAI does. */
-  async function generate(continuityId: string, chunks: string[], batchSize: number, scriptInitiated: boolean) {
+  async function generate(continuityId: string, chunks: string[], batchSize: number, scriptInitiated: boolean, storyMode = false) {
     const model = 'xialong-v1'
+    last.placements = []
     // A reply that kept nothing leaves no paragraph behind.
     const lastSection = sections[sections.length - 1]
     if (lastSection?.origin[0]?.data === 'ai' && lastSection.text === '') sections.pop()
     // The context groups the trailing inputs into one user message after the story.
     let firstInput = sections.length
-    while (firstInput > 0 && sections[firstInput - 1].origin[0]?.data === 'user') firstInput--
+    while (!storyMode && firstInput > 0 && sections[firstInput - 1].origin[0]?.data === 'user') firstInput--
     const storyText = sections.slice(0, firstInput).map((s) => s.text).join('\n')
     const inputs = sections.slice(firstInput).map((s) => s.text).join('\n')
-    sections.push({ text: '', source: 'story', origin: [{ data: 'ai' }] })
+    // Text Adventure replies start a new paragraph; story mode continues the last one.
+    if (!storyMode || sections.length === 0) sections.push({ text: '', source: 'story', origin: [{ data: 'ai' }] })
     const before = structuredClone(sections)
 
     const request = await hooks.onGenerationRequested?.({ continuityId, model, scriptInitiated })
@@ -114,8 +120,9 @@ export function installMockApi(options: MockOptions = {}) {
       { role: 'system', content: 'You are Xialong.' },
       { role: 'user', content: 'Relevant persistent information:\n[ Genre: fantasy ]\n***\nWrite.' },
       { role: 'assistant', content: storyText },
-      ...(inputs ? [{ role: 'user' as const, content: inputs }] : []),
-      { role: 'assistant', content: '' },
+      ...(storyMode
+        ? []
+        : [...(inputs ? [{ role: 'user' as const, content: inputs }] : []), { role: 'assistant' as const, content: '' }]),
     ]
     const context = await hooks.onContextBuilt?.({ continuityId, model, dryRun: false, messages })
     last.context = context?.messages ?? messages
@@ -165,6 +172,17 @@ export function installMockApi(options: MockOptions = {}) {
       await hooks.onTextAdventureInput?.({ continuityId, inputText: input, rawInputText: input, mode: 'action' })
       sections.push({ text: input, source: 'action', origin: [{ data: 'user' }] })
       await generate(continuityId, chunks, batchSize, false)
+    },
+
+    /** Story mode: adds `text` to the story (if any) as the user's own writing, then generates. */
+    async playStory(chunks: string[], { text, batchSize = 1, scriptInitiated = false }: { text?: string; batchSize?: number; scriptInitiated?: boolean } = {}) {
+      if (text !== undefined) sections.push({ text, source: 'story', origin: [{ data: 'user' }] })
+      await generate(`story-${Math.random()}`, chunks, batchSize, scriptInitiated, true)
+    },
+
+    /** Everything placed in the editor by the last generation, joined. */
+    placed() {
+      return (last.placements ?? []).join('')
     },
 
     /** Plays a generation started by a script (such as the guard's retry), with no new input. */

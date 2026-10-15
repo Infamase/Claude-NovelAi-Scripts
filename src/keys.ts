@@ -1,4 +1,4 @@
-// Storage keys and UI extension ids.
+// Text Adventure+'s storage keys, and the UI extension ids.
 
 export const KEYS = {
   /** Story: whether the script is on for this story. */
@@ -17,12 +17,14 @@ export const KEYS = {
 /** Keys used by earlier versions, removed on load. */
 export const OLD_STORY_KEYS = ['tap.diag.armed', 'tap.diag.report', 'tap.diag.step', 'tap.diag.turns', 'tap.diag.lastRun']
 
+/** UI extension ids. Each script has its own extensions, so Story Adventure+ uses the same tab ids. */
 export const IDS = {
   settingsPanel: 'tap-settings',
+  playerPanel: 'tap-player',
   partyPanel: 'tap-party',
   inventoryPanel: 'tap-inventory',
 } as const
 
 export function logError(error: unknown): void {
-  api.v1.error('Text Adventure+:', error)
+  api.v1.error(`${api.v1.script.name}:`, error)
 }

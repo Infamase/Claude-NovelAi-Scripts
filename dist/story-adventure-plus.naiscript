@@ -1,0 +1,1288 @@
+/*---
+compatibilityVersion: naiscript-1.0
+id: 49fb05e0-8e3c-4f0e-a7f0-eaea528b70c5
+name: Story Adventure+
+createdAt: 1792084608383
+updatedAt: 1792085232832
+version: 0.1.0
+author: Infamase
+description: Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Player, Party and Inventory tabs that feed the story context.
+memoryLimit: 8
+---*/
+"use strict";
+(() => {
+  // src/keys.ts
+  var IDS = {
+    settingsPanel: "tap-settings",
+    playerPanel: "tap-player",
+    partyPanel: "tap-party",
+    inventoryPanel: "tap-inventory"
+  };
+  function logError(error) {
+    api.v1.error(`${api.v1.script.name}:`, error);
+  }
+
+  // src/state/store.ts
+  function text(value) {
+    return typeof value === "string" ? value : value == null ? "" : String(value);
+  }
+  function count(value, fallback) {
+    if (value === "" || value == null) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback;
+  }
+  async function idList(key) {
+    const ids = await api.v1.storyStorage.get(key);
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  }
+  async function moveInList(key, id, delta) {
+    const ids = await idList(key);
+    const from = ids.indexOf(id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    await api.v1.storyStorage.set(key, ids);
+  }
+
+  // src/state/inventory.ts
+  var INV = {
+    share: "tap.inv.share",
+    currency: "tap.inv.currency",
+    amount: "tap.inv.amount",
+    prices: "tap.inv.prices",
+    /** The item ids, in the order shown. */
+    items: "tap.inv.items",
+    /** What the AI sees, for the tab's preview. */
+    preview: "tap.inv.preview",
+    item: (id, field) => `tap.inv.item.${id}.${field}`
+  };
+  var DEFAULT_PRICES = [
+    "bread or a mug of ale: 1",
+    "a hot meal: 2",
+    "a night at an inn: 5",
+    "a rug or simple tools: 30",
+    "a sword: 50",
+    "a horse: 300"
+  ].join("\n");
+  var ITEM_FIELDS = ["name", "quantity", "equipped", "note"];
+  async function initInventory() {
+    const s = api.v1.storyStorage;
+    await s.setIfAbsent(INV.share, true);
+    await s.setIfAbsent(INV.currency, "gold");
+    await s.setIfAbsent(INV.amount, 0);
+    await s.setIfAbsent(INV.prices, DEFAULT_PRICES);
+    await s.setIfAbsent(INV.items, []);
+  }
+  async function readInventory() {
+    const s = api.v1.storyStorage;
+    const items = await Promise.all(
+      (await itemIds()).map(async (id) => ({
+        id,
+        name: text(await s.get(INV.item(id, "name"))),
+        quantity: count(await s.get(INV.item(id, "quantity")), 1),
+        equipped: await s.get(INV.item(id, "equipped")) === true,
+        note: text(await s.get(INV.item(id, "note")))
+      }))
+    );
+    return {
+      share: await s.get(INV.share) !== false,
+      currency: text(await s.get(INV.currency)).trim() || "gold",
+      amount: count(await s.get(INV.amount), 0),
+      prices: text(await s.get(INV.prices)),
+      items
+    };
+  }
+  async function addItem() {
+    const id = api.v1.uuid();
+    const s = api.v1.storyStorage;
+    await s.set(INV.item(id, "name"), "");
+    await s.set(INV.item(id, "quantity"), 1);
+    await s.set(INV.item(id, "equipped"), false);
+    await s.set(INV.item(id, "note"), "");
+    await s.set(INV.items, [...await itemIds(), id]);
+    return id;
+  }
+  async function removeItem(id) {
+    const s = api.v1.storyStorage;
+    await s.set(INV.items, (await itemIds()).filter((other) => other !== id));
+    for (const field of ITEM_FIELDS) await s.remove(INV.item(id, field));
+  }
+  async function adjustCount(key, delta, fallback = 0) {
+    const s = api.v1.storyStorage;
+    await s.set(key, Math.max(0, count(await s.get(key), fallback) + delta));
+  }
+  function inventoryLines(inv) {
+    const items = inv.items.filter((item) => item.name.trim() !== "" && item.quantity > 0);
+    if (!inv.share || inv.amount === 0 && items.length === 0) return [];
+    const lines = [`Money: ${inv.amount} ${inv.currency}.`];
+    const prices = priceList(inv.prices);
+    if (prices) lines.push(`Typical prices in ${inv.currency}: ${prices}. Keep every price in the story in line with these.`);
+    const named = (item) => item.quantity > 1 ? `${item.name.trim()} ×${item.quantity}` : item.name.trim();
+    const equipped = items.filter((item) => item.equipped);
+    const carried = items.filter((item) => !item.equipped);
+    if (equipped.length > 0) {
+      lines.push(`Equipped: ${equipped.map((item) => item.note.trim() ? `${named(item)} (${item.note.trim()})` : named(item)).join(", ")}.`);
+    }
+    lines.push(carried.length > 0 ? `Carrying: ${carried.map(named).join(", ")}.` : `Carrying: nothing${equipped.length ? " else" : ""}.`);
+    return lines;
+  }
+  function priceList(guide) {
+    return guide.split("\n").map((line) => line.trim().replace(/\s*[:=–—-]\s*(?=[\d.,]+\s*\S*$)/, " ")).filter((line) => line !== "").join(", ");
+  }
+  function itemIds() {
+    return idList(INV.items);
+  }
+
+  // src/state/party.ts
+  var PARTY = {
+    share: "tap.party.share",
+    /** The member ids, in the order shown. */
+    members: "tap.party.members",
+    /** What the AI sees, for the tab's preview. */
+    preview: "tap.party.preview",
+    member: (id, field) => `tap.party.member.${id}.${field}`
+  };
+  var STATUS_PRESETS = ["Healthy", "Wounded", "Exhausted", "Unconscious"];
+  var ATTITUDE_PRESETS = ["Hostile", "Wary", "Neutral", "Friendly", "Loyal"];
+  var MEMBER_FIELDS = ["name", "role", "status", "attitude", "notes", "present"];
+  var NEW_MEMBER = {
+    name: "",
+    role: "",
+    status: "Healthy",
+    attitude: "Neutral",
+    notes: "",
+    present: true
+  };
+  async function initParty() {
+    await api.v1.storyStorage.setIfAbsent(PARTY.share, true);
+    await api.v1.storyStorage.setIfAbsent(PARTY.members, []);
+  }
+  async function readParty() {
+    const s = api.v1.storyStorage;
+    const members = await Promise.all(
+      (await idList(PARTY.members)).map(async (id) => ({
+        id,
+        name: text(await s.get(PARTY.member(id, "name"))),
+        role: text(await s.get(PARTY.member(id, "role"))),
+        status: text(await s.get(PARTY.member(id, "status"))),
+        attitude: text(await s.get(PARTY.member(id, "attitude"))),
+        notes: text(await s.get(PARTY.member(id, "notes"))),
+        present: await s.get(PARTY.member(id, "present")) !== false
+      }))
+    );
+    return { share: await s.get(PARTY.share) !== false, members };
+  }
+  async function addMember() {
+    const id = api.v1.uuid();
+    const s = api.v1.storyStorage;
+    for (const field of MEMBER_FIELDS) await s.set(PARTY.member(id, field), NEW_MEMBER[field]);
+    await s.set(PARTY.members, [...await idList(PARTY.members), id]);
+    return id;
+  }
+  async function removeMember(id) {
+    const s = api.v1.storyStorage;
+    await s.set(PARTY.members, (await idList(PARTY.members)).filter((other) => other !== id));
+    for (const field of MEMBER_FIELDS) await s.remove(PARTY.member(id, field));
+  }
+  function moveMember(id, delta) {
+    return moveInList(PARTY.members, id, delta);
+  }
+  function partyLines(party) {
+    if (!party.share) return [];
+    return party.members.filter((member) => member.present && member.name.trim() !== "").map((member) => {
+      const role = member.role.trim();
+      const parts = [`Companion: ${member.name.trim()}${role ? `, ${role}` : ""}.`];
+      if (member.status.trim()) parts.push(`Status: ${sentence(member.status)}`);
+      if (member.attitude.trim()) parts.push(`Attitude toward you: ${sentence(member.attitude)}`);
+      const notes = member.notes.split("\n").filter((line) => line.trim() !== "").map(sentence);
+      if (notes.length > 0) parts.push(`Notes: ${notes.join(" ")}`);
+      return parts.join(" ");
+    });
+  }
+  function sentence(value) {
+    const trimmed = value.trim();
+    return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+  }
+
+  // src/state/player.ts
+  var PLAYER = {
+    share: "tap.player.share",
+    /** What the AI sees, for the tab's preview. */
+    preview: "tap.player.preview",
+    field: (field) => `tap.player.${field}`
+  };
+  var PRONOUN_PRESETS = ["he/him", "she/her", "they/them"];
+  var FIELDS = ["name", "pronouns", "role", "appearance", "status", "abilities", "notes"];
+  async function initPlayer() {
+    const s = api.v1.storyStorage;
+    await s.setIfAbsent(PLAYER.share, true);
+    for (const field of FIELDS) await s.setIfAbsent(PLAYER.field(field), field === "status" ? "Healthy" : "");
+  }
+  async function readPlayer() {
+    const s = api.v1.storyStorage;
+    const player = { share: await s.get(PLAYER.share) !== false };
+    for (const field of FIELDS) player[field] = text(await s.get(PLAYER.field(field))).trim();
+    return player;
+  }
+  function playerLines(player) {
+    if (!player.share) return [];
+    const { name, pronouns, role, appearance, status, abilities, notes } = player;
+    if (![name, role, appearance, abilities, notes].some((value) => value !== "")) return [];
+    const who = name ? pronouns ? `${name} (${pronouns})` : name : pronouns ? `pronouns ${pronouns}` : "";
+    const head = [who, role].filter(Boolean).join(", ");
+    const parts = [head ? `The protagonist ("you"): ${head}.` : 'The protagonist ("you").'];
+    if (appearance) parts.push(`Appearance: ${sentences(appearance)}`);
+    if (status) parts.push(`Status: ${sentences(status)}`);
+    if (abilities) parts.push(`Skills and abilities: ${sentences(abilities)}`);
+    if (notes) parts.push(`Notes: ${sentences(notes)}`);
+    return [parts.join(" ")];
+  }
+  function sentences(value) {
+    return value.split("\n").map((line) => line.trim()).filter((line) => line !== "").map((line) => /[.!?…]$/.test(line) ? line : `${line}.`).join(" ");
+  }
+
+  // src/story/keys.ts
+  var KEYS = {
+    /** Story: whether the script is on for this story. */
+    enabled: "sap.enabled",
+    /** Account: keep the story in second person, present tense. */
+    pov: "sap.pov",
+    /** Account: check each reply for slips out of second person, present tense. */
+    check: "sap.check",
+    /** Account: whether the writing guide is added to the system prompt, and its text. */
+    useGuide: "sap.useGuide",
+    guide: "sap.guide",
+    /** Account: the default guide the script last stored, to tell an untouched guide from an edited one. */
+    guideDefault: "sap.guideDefault",
+    /** Story: summary and full details of the last checked reply. */
+    lastReplyStatus: "sap.lastReply.status",
+    lastReplyDetails: "sap.lastReply.details"
+  };
+  var STORY_IDS = {
+    settingsPanel: "sap-settings"
+  };
+
+  // src/state/gameState.ts
+  function gameStateBlock(lines) {
+    if (lines.length === 0) return void 0;
+    return ["Game state (keep the story consistent with it):", ...lines.map((line) => `- ${line}`)].join("\n");
+  }
+
+  // src/ui/common.ts
+  var MUTED = { opacity: 0.7, fontSize: "0.85em" };
+  function debounced(run, delay = 300) {
+    let pending = false;
+    return () => {
+      if (pending) return;
+      pending = true;
+      api.v1.timers.setTimeout(() => {
+        pending = false;
+        run().catch(logError);
+      }, delay).catch(logError);
+    };
+  }
+  function previewSection(key) {
+    return {
+      type: "collapsibleSection",
+      title: "What the AI sees",
+      iconId: "eye",
+      initialCollapsed: true,
+      content: [{ type: "text", text: `{{story:${key}}}`, style: { whiteSpace: "pre-wrap", fontSize: "0.9em" } }]
+    };
+  }
+  function forTemplate(value) {
+    return value.replace(/\{\{/g, "{ {");
+  }
+
+  // src/ui/inventoryPanel.ts
+  var schedulePreview = debounced(() => updatePreview());
+  async function inventoryPanel(rebuild) {
+    const inv = await readInventory();
+    updatePreview(inv).catch(logError);
+    const edited = () => schedulePreview();
+    return {
+      type: "scriptPanel",
+      id: IDS.inventoryPanel,
+      name: "Inventory",
+      iconId: "package",
+      content: [
+        {
+          type: "checkboxInput",
+          label: "Tell the AI about my inventory",
+          storageKey: `story:${INV.share}`,
+          onChange: edited
+        },
+        moneySection(edited),
+        itemsSection(inv, rebuild, edited),
+        previewSection(INV.preview)
+      ]
+    };
+  }
+  function moneySection(edited) {
+    return {
+      type: "box",
+      content: [
+        { type: "text", markdown: true, text: "**Money**" },
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "numberInput", label: "Amount", storageKey: `story:${INV.amount}`, onChange: edited, style: { width: "7em" } },
+            stepButton("−", INV.amount, -1, edited),
+            stepButton("+", INV.amount, 1, edited),
+            {
+              type: "textInput",
+              label: "Currency",
+              placeholder: "gold",
+              storageKey: `story:${INV.currency}`,
+              onChange: edited,
+              style: { width: "12em" }
+            }
+          ]
+        },
+        {
+          type: "collapsibleSection",
+          title: "Price guide",
+          iconId: "tag",
+          initialCollapsed: true,
+          content: [
+            {
+              type: "text",
+              text: 'Typical prices in your currency, one per line, like "a hot meal: 2". The AI is told to keep every price in the story in line with these, so it knows what your money is worth.',
+              style: MUTED
+            },
+            { type: "multilineTextInput", storageKey: `story:${INV.prices}`, onChange: edited }
+          ]
+        }
+      ]
+    };
+  }
+  function itemsSection(inv, rebuild, edited) {
+    return {
+      type: "box",
+      content: [
+        { type: "text", markdown: true, text: "**Items**" },
+        ...inv.items.length > 0 ? inv.items.map((item) => itemPart(item, rebuild, edited)) : [{ type: "text", text: "Nothing yet.", style: MUTED }],
+        {
+          type: "button",
+          text: "Add item",
+          iconId: "plus",
+          disabledWhileCallbackRunning: true,
+          callback: () => addItem().then(rebuild).catch(logError)
+        }
+      ]
+    };
+  }
+  function itemPart(item, rebuild, edited) {
+    const key = (field) => `story:${INV.item(item.id, field)}`;
+    return {
+      type: "column",
+      id: `tap-item-${item.id}`,
+      style: { gap: "4px", paddingBottom: "8px" },
+      content: [
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Item", placeholder: "Item name", storageKey: key("name"), onChange: edited, style: { flex: "1 1 10em" } },
+            { type: "numberInput", label: "Qty", storageKey: key("quantity"), onChange: edited, style: { width: "5em" } },
+            stepButton("−", INV.item(item.id, "quantity"), -1, edited, 1),
+            stepButton("+", INV.item(item.id, "quantity"), 1, edited, 1),
+            { type: "checkboxInput", label: "Equipped", storageKey: key("equipped"), onChange: edited },
+            {
+              type: "button",
+              text: "Remove",
+              iconId: "trash-2",
+              callback: () => removeItem(item.id).then(rebuild).catch(logError)
+            }
+          ]
+        },
+        {
+          type: "textInput",
+          placeholder: 'Note for the AI while equipped (optional), e.g. "notched blade"',
+          storageKey: key("note"),
+          onChange: edited
+        }
+      ]
+    };
+  }
+  function stepButton(text2, key, delta, edited, fallback = 0) {
+    return {
+      type: "button",
+      text: text2,
+      callback: () => adjustCount(key, delta, fallback).then(edited).catch(logError)
+    };
+  }
+  async function updatePreview(inv) {
+    const current = inv ?? await readInventory();
+    const block = gameStateBlock(inventoryLines(current));
+    const text2 = !current.share ? "Nothing: sending the inventory is turned off above." : block ?? "Nothing yet. Add money or an item, and it will be sent with every turn.";
+    await api.v1.storyStorage.set(INV.preview, forTemplate(text2));
+  }
+
+  // src/ui/panelSet.ts
+  function panelSet(builders, ids) {
+    let visible = false;
+    const build = async () => {
+      const panels2 = [];
+      for (const builder of builders) panels2.push(await builder(rebuild));
+      return panels2;
+    };
+    async function rebuild() {
+      if (visible) await api.v1.ui.update(await build());
+    }
+    return {
+      async setVisible(show) {
+        if (show === visible) return;
+        if (show) await api.v1.ui.update(await build());
+        else await api.v1.ui.remove(ids);
+        visible = show;
+      }
+    };
+  }
+
+  // src/ui/partyPanel.ts
+  var schedulePreview2 = debounced(() => updatePartyPreview());
+  var TEXT_ADVENTURE_PARTY_NOTE = 'Companions speak and act for themselves; only your own character is protected. Untick "In party" for someone who is away: they stay listed but are not sent.';
+  async function partyPanel(rebuild, note = TEXT_ADVENTURE_PARTY_NOTE) {
+    const party = await readParty();
+    updatePartyPreview(party).catch(logError);
+    const edited = () => schedulePreview2();
+    return {
+      type: "scriptPanel",
+      id: IDS.partyPanel,
+      name: "Party",
+      iconId: "users",
+      content: [
+        {
+          type: "checkboxInput",
+          label: "Tell the AI about my party",
+          storageKey: `story:${PARTY.share}`,
+          onChange: edited
+        },
+        { type: "text", text: note, style: MUTED },
+        ...party.members.length > 0 ? party.members.map((member, index) => memberPart(member, index, party.members.length, rebuild, edited)) : [{ type: "text", text: "No companions yet.", style: MUTED }],
+        {
+          type: "button",
+          text: "Add companion",
+          iconId: "user-plus",
+          disabledWhileCallbackRunning: true,
+          callback: () => addMember().then(rebuild).catch(logError)
+        },
+        previewSection(PARTY.preview)
+      ]
+    };
+  }
+  function memberPart(member, index, total, rebuild, edited) {
+    const key = (field) => PARTY.member(member.id, field);
+    const presets = (field, words) => words.map((word) => ({
+      type: "button",
+      text: word,
+      callback: () => api.v1.storyStorage.set(key(field), word).then(edited).catch(logError)
+    }));
+    return {
+      type: "box",
+      id: `tap-member-${member.id}`,
+      content: [
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Name", placeholder: "Name", storageKey: `story:${key("name")}`, onChange: edited, style: { width: "10em" } },
+            {
+              type: "textInput",
+              label: "Who they are",
+              placeholder: "elf ranger, your guide",
+              storageKey: `story:${key("role")}`,
+              onChange: edited,
+              style: { flex: "1 1 12em" }
+            },
+            { type: "checkboxInput", label: "In party", storageKey: `story:${key("present")}`, onChange: edited }
+          ]
+        },
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Status", storageKey: `story:${key("status")}`, onChange: edited, style: { width: "12em" } },
+            ...presets("status", STATUS_PRESETS)
+          ]
+        },
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Attitude toward you", storageKey: `story:${key("attitude")}`, onChange: edited, style: { width: "12em" } },
+            ...presets("attitude", ATTITUDE_PRESETS)
+          ]
+        },
+        {
+          type: "textInput",
+          label: "Notes",
+          placeholder: "Personality, goals, secrets (optional)",
+          storageKey: `story:${key("notes")}`,
+          onChange: edited
+        },
+        {
+          type: "row",
+          spacing: "start",
+          content: [
+            {
+              type: "button",
+              text: "Move up",
+              iconId: "arrow-up",
+              disabled: index === 0,
+              callback: () => moveMember(member.id, -1).then(rebuild).catch(logError)
+            },
+            {
+              type: "button",
+              text: "Move down",
+              iconId: "arrow-down",
+              disabled: index === total - 1,
+              callback: () => moveMember(member.id, 1).then(rebuild).catch(logError)
+            },
+            {
+              type: "button",
+              text: "Remove",
+              iconId: "trash-2",
+              callback: () => removeMember(member.id).then(rebuild).catch(logError)
+            }
+          ]
+        }
+      ]
+    };
+  }
+  async function updatePartyPreview(party) {
+    const current = party ?? await readParty();
+    const block = gameStateBlock(partyLines(current));
+    const text2 = !current.share ? "Nothing: sending the party is turned off above." : block ?? "Nothing yet. Add a companion with a name, and they will be sent with every turn.";
+    await api.v1.storyStorage.set(PARTY.preview, forTemplate(text2));
+  }
+
+  // src/ui/playerPanel.ts
+  var schedulePreview3 = debounced(() => updatePlayerPreview());
+  async function playerPanel() {
+    updatePlayerPreview().catch(logError);
+    const edited = () => schedulePreview3();
+    const key = (field) => `story:${PLAYER.field(field)}`;
+    const presets = (field, words) => words.map((word) => ({
+      type: "button",
+      text: word,
+      callback: () => api.v1.storyStorage.set(PLAYER.field(field), word).then(edited).catch(logError)
+    }));
+    const row = (content) => ({ type: "row", wrap: true, spacing: "start", alignment: "end", content });
+    return {
+      type: "scriptPanel",
+      id: IDS.playerPanel,
+      name: "Player",
+      iconId: "user",
+      content: [
+        {
+          type: "checkboxInput",
+          label: "Tell the AI about my character",
+          storageKey: `story:${PLAYER.share}`,
+          onChange: edited
+        },
+        {
+          type: "text",
+          text: 'Who "you" are in the story. Everything is optional; fill in what matters.',
+          style: MUTED
+        },
+        row([
+          { type: "textInput", label: "Name", placeholder: "Name", storageKey: key("name"), onChange: edited, style: { width: "10em" } },
+          { type: "textInput", label: "Pronouns", storageKey: key("pronouns"), onChange: edited, style: { width: "8em" } },
+          ...presets("pronouns", PRONOUN_PRESETS)
+        ]),
+        {
+          type: "textInput",
+          label: "Who you are",
+          placeholder: "human ranger, 24, exiled from the capital",
+          storageKey: key("role"),
+          onChange: edited
+        },
+        {
+          type: "textInput",
+          label: "Appearance",
+          placeholder: "tall, scar over the left eye, travel-worn cloak",
+          storageKey: key("appearance"),
+          onChange: edited
+        },
+        row([
+          { type: "textInput", label: "Status", storageKey: key("status"), onChange: edited, style: { width: "12em" } },
+          ...presets("status", STATUS_PRESETS)
+        ]),
+        {
+          type: "textInput",
+          label: "Skills and abilities",
+          placeholder: "tracking, archery, a little healing magic",
+          storageKey: key("abilities"),
+          onChange: edited
+        },
+        {
+          type: "multilineTextInput",
+          label: "Notes",
+          placeholder: "Personality, backstory, goals, secrets",
+          storageKey: key("notes"),
+          onChange: edited
+        },
+        previewSection(PLAYER.preview)
+      ]
+    };
+  }
+  async function updatePlayerPreview(player) {
+    const current = player ?? await readPlayer();
+    const block = gameStateBlock(playerLines(current));
+    const text2 = !current.share ? "Nothing: sending your character is turned off above." : block ?? "Nothing yet. Fill in a name or a description, and it will be sent with every reply.";
+    await api.v1.storyStorage.set(PLAYER.preview, forTemplate(text2));
+  }
+
+  // src/story/panels.ts
+  var STORY_PARTY_NOTE = 'The people travelling with you. Untick "In party" for someone who is away: they stay listed but are not sent.';
+  var panels = panelSet(
+    [playerPanel, (rebuild) => partyPanel(rebuild, STORY_PARTY_NOTE), inventoryPanel],
+    [IDS.playerPanel, IDS.partyPanel, IDS.inventoryPanel]
+  );
+  var setStoryPanelsVisible = panels.setVisible;
+
+  // src/story/prompt.ts
+  var POV_RULE = 'Point of view and tense: second person, present tense. In the narration the protagonist is always "you" (never "I", never their name, never "he", "she" or "they"), and events happen now: "You push the door open," not "You pushed the door open." Other characters are "he", "she" or "they" as usual. Hold to this in every sentence of narration, even where earlier parts of the story slip. Dialogue is free: characters talk in whatever person and tense comes naturally to them.';
+  var DEFAULT_GUIDE = [
+    "You are co-writing an interactive story with the user. Continue it from exactly where the text stops, even mid-sentence, without repeating or retelling anything already written. Write like a skilled novelist: specific, vivid, controlled and easy to read.",
+    "",
+    "Craft:",
+    '- Be concrete. Name the real thing ("a chipped clay mug", not "a vessel"), and choose the one telling detail over three generic ones. Use sound, smell, touch and temperature, not only sight.',
+    "- Prefer plain, strong verbs and nouns. Cut filler adverbs and stacked adjectives. Choose the simple word over the fancy one.",
+    "- Vary sentence length and shape. Don't start sentence after sentence the same way, don't list things in threes by habit, and don't end each paragraph on a one-line punchline.",
+    "- Show, then trust the reader. Let action, dialogue and detail carry the feeling; don't name the emotion afterwards or explain what a moment means.",
+    "- Make dialogue sound like people: contractions, interruptions, dodged questions, subtext. Give each character their own voice. Nobody makes speeches about their feelings or recaps what just happened.",
+    "- Give characters their own wants, and let them act on them. They can refuse, lie, misread you, lose their temper or be busy with something else. Not everyone is kind, impressed or agreeable, and problems don't solve themselves.",
+    "- Stay in the scene, moment to moment, and let tension last. Don't summarize, skip ahead or wrap things up.",
+    "- Stop where the action pauses. Never end on a reflection, a moral, a hint of what's to come, or a line about what lies ahead.",
+    "- Keep every fact consistent with the story so far and the game state: names, wounds, belongings, prices, who knows what. Use the game state; never recite it.",
+    "- Write only the story: no titles, author's notes, commentary, or questions to the reader.",
+    "",
+    `Avoid stock phrases like these, and anything like them: a shiver running down the spine; a breath you didn't know you were holding; the air thick with tension; palpable; electric; a mix of fear and excitement; eyes sparkling with mischief; a smirk playing on lips; a smile that doesn't reach the eyes; the ghost of a smile; an unreadable expression; barely above a whisper; a voice dripping with honey; knuckles whitening; something primal; a flicker of emotion; a testament to; tapestry; symphony; a dance of; orbs for eyes; ministrations; maybe, just maybe; little did you know; in that moment; time seems to stop; the weight of the moment; "it's not X, it's Y"; the smell of ozone. Use em dashes sparingly.`
+  ].join("\n");
+  var POV_REMINDER = "Continue the story from where it stops, in second person, present tense.";
+  function systemAddition(pov, guide) {
+    const parts = [pov ? POV_RULE : "", guide.trim()].filter(Boolean);
+    return parts.length > 0 ? parts.join("\n\n") : void 0;
+  }
+  function storyNote(pov, gameState) {
+    const parts = [gameState ?? "", pov ? POV_REMINDER : ""].filter(Boolean);
+    return parts.length > 0 ? parts.join("\n\n") : void 0;
+  }
+  function withStoryPrompt(messages, { system, note }) {
+    const result = messages.map((m) => ({ ...m }));
+    if (system) {
+      const index = result.findIndex((m) => m.role === "system");
+      if (index >= 0) result[index].content = joinParts(result[index].content, system);
+      else result.unshift({ role: "system", content: system });
+    }
+    if (note) {
+      let index = -1;
+      for (let i = result.length - 1; i >= 0 && index < 0; i--) if (result[i].role === "user") index = i;
+      if (index >= 0) {
+        const content = result[index].content ?? "";
+        const write = /\n*Write\.\s*$/.exec(content);
+        result[index].content = write ? `${joinParts(content.slice(0, write.index), note)}
+
+Write.` : joinParts(content, note);
+      } else {
+        const firstStory = result.findIndex((m) => m.role !== "system");
+        result.splice(firstStory >= 0 ? firstStory : result.length, 0, { role: "user", content: note });
+      }
+    }
+    return result;
+  }
+  function joinParts(first, second) {
+    return first?.trim() ? `${first.replace(/\s+$/, "")}
+
+${second}` : second;
+  }
+
+  // src/story/settingsPanel.ts
+  var MUTED2 = { opacity: 0.7, fontSize: "0.85em" };
+  async function registerSettingsPanel() {
+    await api.v1.ui.register([
+      {
+        type: "sidebarPanel",
+        id: STORY_IDS.settingsPanel,
+        name: "Story Adventure+",
+        iconId: "bookOpen",
+        content: [
+          { type: "text", markdown: true, text: `**Story Adventure+** v${api.v1.script.version}` },
+          {
+            type: "checkboxInput",
+            label: "Enable for this story",
+            storageKey: `story:${KEYS.enabled}`,
+            onChange: (on) => {
+              setStoryPanelsVisible(on).catch(logError);
+            }
+          },
+          {
+            type: "text",
+            text: "When enabled, Player, Party and Inventory tabs appear above the bottom controls, and the settings below apply to this story.",
+            style: MUTED2
+          },
+          { type: "checkboxInput", label: "Second person, present tense", storageKey: KEYS.pov },
+          {
+            type: "text",
+            text: 'Tells the AI to write with you as the protagonist ("you step inside"), in the present tense.',
+            style: MUTED2
+          },
+          { type: "checkboxInput", label: "Catch slips", storageKey: KEYS.check },
+          {
+            type: "text",
+            text: `Checks each reply and cuts it where it slips into past tense, first person ("I") or your character's name. If nothing is left, it asks the AI again, up to twice. Sentences that might slip wait until the reply is finished.`,
+            style: MUTED2
+          },
+          { type: "checkboxInput", label: "Use the writing guide", storageKey: KEYS.useGuide },
+          {
+            type: "collapsibleSection",
+            title: "Writing guide",
+            iconId: "feather",
+            initialCollapsed: true,
+            content: [
+              {
+                type: "text",
+                text: "Added to the system prompt with every reply: how to write well, and the stock phrases to avoid. Edit it to taste.",
+                style: MUTED2
+              },
+              { type: "multilineTextInput", storageKey: KEYS.guide, style: { minHeight: "16em" } },
+              {
+                type: "button",
+                text: "Reset to default",
+                iconId: "rotate-ccw",
+                callback: () => resetGuide().catch(logError)
+              }
+            ]
+          },
+          {
+            type: "collapsibleSection",
+            title: "Last reply",
+            iconId: "activity",
+            content: [
+              {
+                type: "text",
+                text: `{{story:${KEYS.lastReplyStatus}}}`,
+                style: { whiteSpace: "pre-wrap", fontSize: "0.9em" }
+              },
+              {
+                type: "button",
+                text: "Copy details",
+                iconId: "copy",
+                callback: () => copyDetails().catch(logError)
+              },
+              {
+                type: "text",
+                text: "If a reply was cut wrongly, or a slip got through, copy its details and send them to Claude.",
+                style: MUTED2
+              }
+            ]
+          }
+        ]
+      }
+    ]);
+  }
+  async function initGuide() {
+    const s = api.v1.storage;
+    const guide = await s.get(KEYS.guide);
+    const lastDefault = await s.get(KEYS.guideDefault);
+    if (guide === void 0 || guide === lastDefault && lastDefault !== DEFAULT_GUIDE) await resetGuide();
+  }
+  async function resetGuide() {
+    await api.v1.storage.set(KEYS.guide, DEFAULT_GUIDE);
+    await api.v1.storage.set(KEYS.guideDefault, DEFAULT_GUIDE);
+  }
+  async function copyDetails() {
+    const details = await api.v1.storyStorage.get(KEYS.lastReplyDetails);
+    if (!details) {
+      await api.v1.ui.toast("No reply has been checked in this story yet.", { type: "info" });
+      return;
+    }
+    const granted = await api.v1.permissions.request(
+      "clipboardWrite",
+      "Story Adventure+ needs clipboard access to copy the last reply's details."
+    );
+    if (!granted) return;
+    await api.v1.clipboard.writeText(String(details));
+    await api.v1.ui.toast("Details copied.", { type: "success" });
+  }
+
+  // src/guard/text.ts
+  var TERMINATORS = ".!?…";
+  var CLOSERS = `"'”’)]*_`;
+  var ABBREVIATIONS = /* @__PURE__ */ new Set([
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "st",
+    "sr",
+    "jr",
+    "mt",
+    "vs",
+    "etc",
+    "prof",
+    "capt",
+    "gen",
+    "lt",
+    "sgt",
+    "col"
+  ]);
+  function findSentenceEnd(text2) {
+    for (let i = 0; i < text2.length; i++) {
+      const ch = text2[i];
+      if (ch === "\n") {
+        if (text2.slice(0, i).trim() !== "") return i;
+        continue;
+      }
+      if (!TERMINATORS.includes(ch)) continue;
+      let end = i + 1;
+      while (end < text2.length && TERMINATORS.includes(text2[end])) end++;
+      while (end < text2.length && CLOSERS.includes(text2[end])) end++;
+      if (end >= text2.length) return -1;
+      if (!isSpace(text2[end]) || ch === "." && isAbbreviation(text2, i)) {
+        i = end - 1;
+        continue;
+      }
+      let next = end;
+      while (next < text2.length && isSpace(text2[next])) {
+        if (text2[next] === "\n") return end;
+        next++;
+      }
+      if (next >= text2.length) return -1;
+      if (/\p{Ll}/u.test(text2[next])) {
+        i = next - 1;
+        continue;
+      }
+      return end;
+    }
+    return -1;
+  }
+  function splitSentences(text2) {
+    const sentences2 = [];
+    let start = 0;
+    while (start < text2.length && text2.slice(start).trim() !== "") {
+      const end = findSentenceEnd(text2.slice(start));
+      const stop = end < 0 ? text2.length : start + end;
+      sentences2.push({ start, end: stop, text: text2.slice(start, stop) });
+      start = stop;
+    }
+    return sentences2;
+  }
+  function quoteMask(text2) {
+    const mask = [];
+    let inside = false;
+    for (let i = 0; i < text2.length; i++) {
+      const ch = text2[i];
+      if (ch === "\n") inside = false;
+      if (ch === "“" || ch === '"' && !inside) {
+        mask.push(true);
+        inside = true;
+      } else if (ch === "”" || ch === '"') {
+        mask.push(true);
+        inside = false;
+      } else {
+        mask.push(inside);
+      }
+    }
+    return mask;
+  }
+  function sliceChunks(chunks, from, to) {
+    let offset = 0;
+    return chunks.map((chunk) => {
+      const start = Math.max(0, from - offset);
+      const end = Math.min(chunk.length, to - offset);
+      offset += chunk.length;
+      return start < end ? chunk.slice(start, end) : "";
+    });
+  }
+  function isSpace(ch) {
+    return ch === " " || ch === "\n" || ch === "	" || ch === "\r";
+  }
+  function isAbbreviation(text2, dotIndex) {
+    const word = /([A-Za-z]+)$/.exec(text2.slice(Math.max(0, dotIndex - 12), dotIndex))?.[1];
+    if (!word) return false;
+    if (word.length === 1) return word !== "I" && word === word.toUpperCase();
+    return ABBREVIATIONS.has(word.toLowerCase());
+  }
+
+  // src/story/slips.ts
+  var SUBJECTS = "(?:you|he|she|it|they|we)";
+  var ADVERB = "(?:(?:[a-z]+ly|just|still|then|never|always|already|almost|also|even|once|soon|now|again|sometimes|perhaps)\\s+)?";
+  var WORD = "([a-z]+(?:['’][a-z]+)?)";
+  var PAST_AUX = /* @__PURE__ */ new Set(["was", "were", "had", "did", "wasn't", "weren't", "hadn't", "didn't"]);
+  var PRESENT_AUX = /* @__PURE__ */ new Set([
+    "am",
+    "is",
+    "are",
+    "has",
+    "have",
+    "do",
+    "does",
+    "can",
+    "isn't",
+    "aren't",
+    "hasn't",
+    "haven't",
+    "don't",
+    "doesn't",
+    "can't"
+  ]);
+  var BARE_PRESENT_AUX = /* @__PURE__ */ new Set(["is", "are", "has", "isn't", "aren't", "hasn't"]);
+  var IRREGULAR_PAST = new Set(
+    "saw said went came took made knew thought felt found gave told got left kept began ran stood sat held brought heard meant met paid fell rose spoke wrote drew drove threw grew wore chose broke woke froze shook caught taught fought sought bought led fled slept swept wept knelt dealt built sent spent lost struck hung swung clung flung stung sank sang rang drank swam forgot hid bit slid lit ate became understood won sold flew blew tore swore bore rode strode spun stuck shone dug fed bled sped bent lent crept leapt sprang shrank stole wove arose awoke withdrew overheard forgave".split(" ")
+  );
+  var NOT_PAST = new Set(
+    "need feed bleed breed speed proceed succeed exceed heed seed weed shed shred wed embed bed sled red bred".split(" ")
+  );
+  var NOT_VERBS = new Set(
+    "and or but nor so too all both alone here there to a an the in on at with for from of into onto off out up down back away again now then yourself yourselves themselves ourselves as if that this these those what who whom which when where why how than like about before after through toward towards over under by no not nothing something everything anything one two three my his her their our its your me him them us it some any every each more most much many little few enough very right while until since because though although will would could should might must may shall yours always perhaps".split(" ")
+  );
+  var LY_VERBS = new Set("reply replies apply applies rely relies fly flies supply comply imply rally bully".split(" "));
+  var NARRATION_PAST = new Set(
+    "said went came took knew gave told stood began spoke drew threw grew ran sat heard brought caught fought wore chose woke froze shook swore tore rode strode flew sang sank drank swam slept wept knelt crept leapt sprang stole forgot became understood seemed looked turned smiled nodded stared glanced whispered murmured replied asked answered laughed sighed shrugged frowned grinned walked stepped reached pulled pushed waited paused continued added lifted tilted narrowed widened leaned hesitated studied noticed realized wanted needed tried kept".split(" ")
+  );
+  var NARRATION_PRESENT = new Set(
+    "says goes comes takes knows gives tells stands begins speaks grows sits hears brings catches wears chooses wakes shakes rides sings swims sleeps kneels creeps steals forgets becomes understands seems nods murmurs asks shrugs frowns reaches pulls pushes opens closes waits continues adds lifts tilts narrows widens rises leans hesitates studies notices realizes feels sees thinks wants needs tries finds keeps leaves lets puts holds".split(" ")
+  );
+  var MEMORY_CUE = /\b(?:remember(?:s|ed|ing)?|recall(?:s|ed|ing)?|memor(?:y|ies)|years ago|long ago|back then|used to|as a child|in your dreams?|you once)\b/i;
+  function speechMask(text2) {
+    const mask = quoteMask(text2);
+    let open;
+    for (let i = 0; i < text2.length; i++) {
+      const ch = text2[i];
+      if (ch === "\n") {
+        open = void 0;
+        continue;
+      }
+      if (open) {
+        mask[i] = true;
+        if (closes(open, text2, i)) open = void 0;
+      } else if (!mask[i] && opens(text2, i)) {
+        open = ch;
+        mask[i] = true;
+      }
+    }
+    return mask;
+  }
+  function opens(text2, i) {
+    const ch = text2[i];
+    const before = text2[i - 1] ?? " ";
+    const after = text2[i + 1] ?? " ";
+    if (ch === "‘") return true;
+    if (ch === "'") return !/[\p{L}\p{N}]/u.test(before) && /\p{L}/u.test(after);
+    if (ch === "*" || ch === "_") return !/[\p{L}\p{N}*_]/u.test(before) && !/[\s*_]/.test(after);
+    return false;
+  }
+  function closes(open, text2, i) {
+    const ch = text2[i];
+    const before = text2[i - 1] ?? " ";
+    const after = text2[i + 1] ?? " ";
+    if (open === "‘") return ch === "’" && !/\p{L}/u.test(after);
+    if (open === "'") return ch === "'" && !/\s/.test(before) && !/\p{L}/u.test(after);
+    return ch === open && !/\s/.test(before);
+  }
+  function checkSentences(text2, sentences2, playerName = "") {
+    const mask = speechMask(text2);
+    const nameRe = namePattern(playerName);
+    let inMemory = false;
+    return sentences2.map((sentence2) => {
+      let narration = "";
+      for (let i = sentence2.start; i < sentence2.end; i++) narration += mask[i] ? " " : text2[i];
+      const check = checkNarration(narration, nameRe);
+      if (MEMORY_CUE.test(narration)) inMemory = true;
+      else if (check.present > check.past) inMemory = false;
+      check.memory = inMemory;
+      return check;
+    });
+  }
+  function checkNarration(narration, nameRe) {
+    const check = { past: 0, present: 0, memory: false };
+    const pastFound = (form) => {
+      check.past++;
+      check.pastExample ?? (check.pastExample = form);
+    };
+    const firstPerson = /\bI\b/.exec(narration.replace(/\b(?:chapter|part|book|act|volume|king|queen) I\b/gi, "")) ?? /\b(?:me|my|myself)\b/i.exec(narration);
+    if (firstPerson) check.firstPerson = firstPerson[0];
+    if (nameRe) {
+      for (const match of narration.matchAll(nameRe)) {
+        if (verbTense("she", match[2]) !== void 0) {
+          check.named = match[1];
+          break;
+        }
+      }
+    }
+    let rest = narration.replace(
+      new RegExp(`\\b${SUBJECTS}(?:['’](re|ve|s|m))?\\b(?:\\s+${ADVERB}${WORD})?`, "gi"),
+      (match, contraction, word) => {
+        if (contraction) {
+          check.present++;
+          return " ";
+        }
+        if (!word) return match;
+        const subject = match.split(/\s+/)[0];
+        const tense = verbTense(subject, word);
+        if (tense === "past") pastFound(`${subject} ${word}`.toLowerCase());
+        else if (tense === "present") check.present++;
+        return tense ? " " : match;
+      }
+    );
+    rest = rest.replace(/\b[a-z]+(?:['’]t)?\b/gi, (word) => {
+      const w = normalize(word);
+      if (PAST_AUX.has(w) && w !== "did" && w !== "didn't") pastFound(w);
+      else if (NARRATION_PAST.has(w)) pastFound(w);
+      else if (BARE_PRESENT_AUX.has(w)) check.present++;
+      else if (NARRATION_PRESENT.has(w)) check.present++;
+      return " ";
+    });
+    return check;
+  }
+  function verbTense(subject, word) {
+    const w = normalize(word);
+    if (PAST_AUX.has(w) || IRREGULAR_PAST.has(w) || /^[a-z]{2,}ed$/.test(w) && !NOT_PAST.has(w)) return "past";
+    if (PRESENT_AUX.has(w)) return "present";
+    if (NOT_VERBS.has(w) || /ing$/.test(w) || !/^[a-z]+$/.test(w)) return void 0;
+    if (/ly$/.test(w) && !LY_VERBS.has(w)) return void 0;
+    if (/^(?:he|she|it)$/i.test(subject)) return /^[a-z]*[^s]s$/.test(w) ? "present" : void 0;
+    return "present";
+  }
+  function normalize(word) {
+    return word.toLowerCase().replace(/’/g, "'");
+  }
+  function namePattern(playerName) {
+    const parts = playerName.split(/\s+/).filter((part) => /^\p{Lu}[\p{L}'’-]+$/u.test(part)).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    if (parts.length === 0) return void 0;
+    return new RegExp(`(?:^|[^\\p{L}'’])((?:${parts.join("|")})(?![\\p{L}'’])\\s+${ADVERB}${WORD})`, "gu");
+  }
+  function findSlip(checks) {
+    const tensed = checks.filter((c) => !c.memory && c.past !== c.present);
+    const endsInPast = tensed.length > 0 && isPast(tensed[tensed.length - 1]);
+    for (let i = 0; i < checks.length; i++) {
+      const check = checks[i];
+      if (check.firstPerson) return { index: i, reason: `slips into first person ("${check.firstPerson}")` };
+      if (check.named) return { index: i, reason: `calls you by name ("${check.named}")` };
+      if (endsInPast && isPast(check) && !check.memory) {
+        const rest = checks.slice(i);
+        const past = rest.filter((c) => isPast(c) && !c.memory).length;
+        const present = rest.filter((c) => c.present > c.past).length;
+        if (past >= 2 && past > present) return { index: i, reason: `slips into past tense ("${check.pastExample}")` };
+      }
+    }
+    return void 0;
+  }
+  function mightSlip(check) {
+    return Boolean(check.firstPerson || check.named || isPast(check) && !check.memory);
+  }
+  function isPast(check) {
+    return check.past > check.present;
+  }
+
+  // src/story/storyGuard.ts
+  var MAX_AUTO_RETRIES = 2;
+  var replies = /* @__PURE__ */ new Map();
+  var tokenCounts = /* @__PURE__ */ new Map();
+  var retriesInARow = 0;
+  function registerStoryHooks() {
+    api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model, inlineGeneration, toolboxMode, scriptInitiated }) => {
+      if (inlineGeneration || toolboxMode || !await isEnabled()) return;
+      if (!scriptInitiated) retriesInARow = 0;
+      replies.set(continuityId, { model, ...await readSettings(), name: (await readPlayer()).name, released: "" });
+    });
+    api.v1.hooks.register("onBeforeContextBuild", async ({ continuityId, model, dryRun }) => {
+      const settings = await settingsFor(continuityId, dryRun);
+      if (!settings) return;
+      const state = await gameStateText();
+      const fixed = [systemAddition(settings.pov, settings.guide), storyNote(settings.pov)].filter(Boolean).join("\n\n");
+      const stateTokens = state ? Math.ceil(state.length / 3) + 4 : 0;
+      return { contextLimitReduction: await tokenCount(fixed, model) + stateTokens + 8 };
+    });
+    api.v1.hooks.register("onContextBuilt", async ({ continuityId, dryRun, messages }) => {
+      const settings = await settingsFor(continuityId, dryRun);
+      if (!settings) return;
+      return {
+        messages: withStoryPrompt(messages, {
+          system: systemAddition(settings.pov, settings.guide),
+          note: storyNote(settings.pov, await gameStateText())
+        })
+      };
+    });
+    api.v1.hooks.register("onResponse", async ({ continuityId, text: text2, final }) => {
+      const reply = replies.get(continuityId);
+      if (!reply || !reply.pov || !reply.check) return;
+      const full = reply.released + text2.join("");
+      if (!final) {
+        const count2 = chunksWithin(text2, releasable(full, reply.name) - reply.released.length);
+        reply.released += text2.slice(0, count2).join("");
+        return { seenData: count2 };
+      }
+      const decision = decideSlips(full, reply.name);
+      const keep = decision.keep = Math.max(decision.keep, reply.released.length);
+      if (keptNothing(decision)) {
+        if (retriesInARow < MAX_AUTO_RETRIES) reply.retryNumber = retriesInARow + 1;
+      } else {
+        retriesInARow = 0;
+      }
+      report(reply, decision).catch(logError);
+      if (keep >= full.length) return;
+      return { text: sliceChunks(text2, 0, keep - reply.released.length) };
+    });
+    api.v1.hooks.register("onGenerationEnd", ({ continuityId }) => {
+      const reply = replies.get(continuityId);
+      replies.delete(continuityId);
+      if (reply?.retryNumber === void 0) return;
+      retriesInARow = reply.retryNumber;
+      api.v1.timers.setTimeout(() => api.v1.editor.generate().catch(logError), 50).catch(logError);
+    });
+  }
+  async function gameStateText() {
+    return gameStateBlock([
+      ...playerLines(await readPlayer()),
+      ...partyLines(await readParty()),
+      ...inventoryLines(await readInventory())
+    ]);
+  }
+  function decideSlips(reply, name = "") {
+    const sentences2 = splitSentences(reply);
+    const checks = checkSentences(reply, sentences2, name);
+    const slip = findSlip(checks);
+    let keep = slip ? sentences2[slip.index].start : reply.length;
+    if (slip) while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
+    return { reply, sentences: sentences2, checks, slip, keep };
+  }
+  function releasable(reply, name = "") {
+    const sentences2 = splitSentences(reply);
+    if (sentences2.length === 0) return 0;
+    const checks = checkSentences(reply, sentences2, name);
+    let index = 0;
+    while (index < sentences2.length - 1 && !mightSlip(checks[index])) index++;
+    return sentences2[index].start;
+  }
+  function chunksWithin(chunks, length) {
+    let total = 0;
+    let count2 = 0;
+    while (count2 < chunks.length && total + chunks[count2].length <= length) {
+      total += chunks[count2].length;
+      count2++;
+    }
+    return count2;
+  }
+  function keptNothing(decision) {
+    return decision.reply.trim() !== "" && decision.reply.slice(0, decision.keep).trim() === "";
+  }
+  async function report(reply, decision) {
+    await api.v1.storyStorage.set(KEYS.lastReplyStatus, sanitize(statusText(decision, reply)));
+    await api.v1.storyStorage.set(KEYS.lastReplyDetails, sanitize(detailsText(reply, decision)));
+    if (!keptNothing(decision)) return;
+    if (reply.retryNumber !== void 0) {
+      await api.v1.ui.toast(
+        `Story Adventure+: the reply slipped out of second person, present tense from its first sentence, so it was dropped. Asking again (${reply.retryNumber} of ${MAX_AUTO_RETRIES})…`,
+        { type: "info" }
+      );
+    } else {
+      await api.v1.ui.toast(
+        `Story Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. Check that the story so far is in second person, present tense, or turn off Catch slips.`,
+        { type: "warning" }
+      );
+    }
+  }
+  function statusText(d, reply) {
+    if (!d.reply.trim()) return "Last reply: the AI wrote nothing.";
+    const total = d.sentences.length;
+    if (!d.slip) return `Last reply: no slips (${total} sentence${total === 1 ? "" : "s"}).`;
+    const kept = d.sentences.filter((s) => s.start < d.keep).length;
+    const sentence2 = quote(d.sentences[d.slip.index].text.trim(), 120);
+    const lines = [
+      kept === 0 ? `Last reply: nothing was kept. It slipped from the first sentence: ${sentence2}` : `Last reply: kept ${kept} of ${total} sentences. Cut from: ${sentence2}`,
+      `Why: it ${d.slip.reason}.`
+    ];
+    if (kept === 0 && reply?.retryNumber !== void 0) {
+      lines.push(`Asking the AI again automatically (${reply.retryNumber} of ${MAX_AUTO_RETRIES}).`);
+    }
+    return lines.join("\n");
+  }
+  function detailsText(reply, d) {
+    const marks = d.sentences.map((s, i) => {
+      const mark = s.start < d.keep ? "✓" : d.slip?.index === i ? "✂" : "·";
+      const c = d.checks[i];
+      const notes = [
+        `past ${c.past}, present ${c.present}`,
+        c.memory ? "memory" : "",
+        c.firstPerson ? `first person "${c.firstPerson}"` : "",
+        c.named ? `named "${c.named}"` : ""
+      ].filter(Boolean);
+      return `  ${i + 1} ${mark} (${notes.join("; ")}) ${quote(s.text.trim(), 400)}`;
+    });
+    return [
+      `Story Adventure+ last reply (v${api.v1.script.version})`,
+      `Model: ${reply.model} | name: ${reply.name ? quote(reply.name, 60) : "(none)"}`,
+      statusText(d, reply),
+      "Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):",
+      ...marks
+    ].join("\n");
+  }
+  async function isEnabled() {
+    return await api.v1.storyStorage.get(KEYS.enabled) === true;
+  }
+  async function readSettings() {
+    const s = api.v1.storage;
+    return {
+      pov: await s.get(KEYS.pov) !== false,
+      check: await s.get(KEYS.check) !== false,
+      guide: await s.get(KEYS.useGuide) !== false ? text(await s.get(KEYS.guide)) : ""
+    };
+  }
+  async function settingsFor(continuityId, dryRun) {
+    const reply = replies.get(continuityId);
+    if (reply) return reply;
+    if (dryRun && await isEnabled()) return readSettings();
+    return void 0;
+  }
+  async function tokenCount(text2, model) {
+    if (!text2) return 0;
+    const key = `${model}|${text2}`;
+    let count2 = tokenCounts.get(key);
+    if (count2 === void 0) {
+      count2 = await api.v1.tokenizer.encode(text2, model).then((tokens) => tokens.length).catch(() => Math.ceil(text2.length / 3));
+      if (tokenCounts.size > 8) tokenCounts.clear();
+      tokenCounts.set(key, count2);
+    }
+    return count2;
+  }
+  function quote(text2, max) {
+    return JSON.stringify(text2.length > max ? text2.slice(0, max) + "…" : text2);
+  }
+  function sanitize(text2) {
+    return text2.replace(/\{\{/g, "{ {");
+  }
+
+  // src/story/main.ts
+  async function init() {
+    await api.v1.storage.setIfAbsent(KEYS.pov, true);
+    await api.v1.storage.setIfAbsent(KEYS.check, true);
+    await api.v1.storage.setIfAbsent(KEYS.useGuide, true);
+    await initGuide();
+    await api.v1.storyStorage.setIfAbsent(KEYS.lastReplyStatus, "No reply checked yet.");
+    await initPlayer();
+    await initParty();
+    await initInventory();
+    await registerSettingsPanel();
+    const enabled = await api.v1.storyStorage.get(KEYS.enabled) === true;
+    await setStoryPanelsVisible(enabled);
+    api.v1.log(`Story Adventure+ v${api.v1.script.version} loaded (enabled for this story: ${enabled})`);
+  }
+  registerStoryHooks();
+  init().catch(logError);
+})();

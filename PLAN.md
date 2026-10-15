@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish.
+Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish. A Story mode fork, **Story Adventure+**, is built too (v0.1.0); see section 13.
 
 ---
 
@@ -209,3 +209,39 @@ dist/text-adventure-plus.naiscript   ← the file you import
 ## 12. Open questions (answer whenever)
 
 1. **Bad turns (whenever you hit them):** press **Copy details** in the sidebar's Last turn section and paste the result. Each one becomes a test case.
+
+---
+
+## 13. Story Adventure+ (Story mode fork)
+
+A second script in this repo for Story mode. It drops the turn guard and keeps the Party and Inventory tabs (shared code), and adds:
+
+| Topic | Decision |
+|---|---|
+| Mode | **Story mode.** You and the AI write the story together; the AI may write what "you" do. No turn guard, no referee. |
+| Point of view | **Second person, present tense**, on by default. A rule in the system prompt, and a one-line reminder just before the story. |
+| Keeping to it | **Catch slips**, on by default: a pattern check cuts a reply where its narration slips into the past tense, the first person or the protagonist's name, and asks again (up to twice) if nothing is left. |
+| Writing quality | A **writing guide** in the system prompt against common AI habits and stock phrases. Editable in the sidebar, with Reset to default; an unedited guide updates with new versions. |
+| Player character | A **Player** tab: name, pronouns, who you are, appearance, status, skills, notes. |
+| Name | **Story Adventure+** (its own script id, imported separately). |
+
+### How it works
+
+- **Context.** `onContextBuilt` appends the point-of-view rule and the guide to the system message, and puts the game state (player, party, inventory) and the reminder in the last user message (the memory), before NovelAI's closing "Write.". Room is reserved with `contextLimitReduction`. The Context viewer shows all of it.
+- **Catch slips.** Text Adventure+ showed that stopping a reply loses it, so this check holds text back with `seenData` too, but it holds back less: sentences that are clearly fine go through as they arrive, and only from the first sentence that might start a slip does the rest wait for the end. On the final call the reply is cut before the first slip.
+  - First person ("I", "me", "my") or the protagonist's name as a subject ("Hunter walks") in the narration: a slip right there.
+  - Past tense: counted per sentence from verb forms after pronouns ("you stepped", "she said"), "was"/"were"/"had", and common narration verbs. A run counts as a slip only if at least two sentences are past, the past outnumbers the present from there on, and the reply is still in the past at its end. Memories ("You remember…") are exempt, and so is backstory that returns to the present.
+  - Dialogue in double or single quotes and *italic* thoughts are never checked.
+- **Retries.** When nothing of a reply is left, the script calls `editor.generate()` after the generation ends, up to twice in a row. Pressing Send yourself resets the count.
+
+### Assumptions to confirm in the first playtest
+
+- **Story mode's context layout** is assumed to match Text Adventure's without the input message: system, user (memory, ending in "Write."), assistant (the story). If it differs, the additions may land in the wrong place; the Context viewer will show it.
+- **Streaming.** If story mode streams replies word by word, held-back sentences appear in bursts. If it shows replies all at once, like Text Adventure, nothing changes on screen.
+- **Tab storage** is per script, so a story's tabs don't carry over between the two scripts.
+
+### Risks
+
+- **False slips.** Past-tense flashbacks without a memory cue, or quotes in an unusual style, can be cut. Copy details in the Last reply section shows each sentence's tense count, to tune the check.
+- **Missed slips.** Past-tense sentences without a pronoun or a listed verb ("Smoke curled from the vent.") aren't counted, so a short slip can get through. The rule and reminder do most of the work; the check catches the clear cases.
+- **Token cost.** The guide and rule take about 750 tokens of context each reply. The guide can be shortened or switched off.

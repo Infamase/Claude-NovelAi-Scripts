@@ -1,18 +1,32 @@
 {
-  "name": "text-adventure-plus",
-  "version": "0.4.0",
+  "name": "claude-novelai-scripts",
   "private": true,
-  "description": "NovelAI user script: stops Text Adventure output at your turn, plus Party and Inventory tabs.",
+  "description": "NovelAI user scripts: Text Adventure+ and Story Adventure+.",
   "type": "module",
-  "naiscript": {
-    "id": "37ab87de-bafd-4cf2-8fc1-3ce1741c8677",
-    "name": "Text Adventure+",
-    "author": "Infamase",
-    "description": "Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.",
-    "createdAt": 1792063961849,
-    "memoryLimit": 8,
-    "output": "dist/text-adventure-plus.naiscript"
-  },
+  "naiscripts": [
+    {
+      "entry": "src/main.ts",
+      "id": "37ab87de-bafd-4cf2-8fc1-3ce1741c8677",
+      "name": "Text Adventure+",
+      "version": "0.4.1",
+      "author": "Infamase",
+      "description": "Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.",
+      "createdAt": 1792063961849,
+      "memoryLimit": 8,
+      "output": "dist/text-adventure-plus.naiscript"
+    },
+    {
+      "entry": "src/story/main.ts",
+      "id": "49fb05e0-8e3c-4f0e-a7f0-eaea528b70c5",
+      "name": "Story Adventure+",
+      "version": "0.1.0",
+      "author": "Infamase",
+      "description": "Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Player, Party and Inventory tabs that feed the story context.",
+      "createdAt": 1792084608383,
+      "memoryLimit": 8,
+      "output": "dist/story-adventure-plus.naiscript"
+    }
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",

@@ -22,7 +22,14 @@ import { MUTED, debounced, forTemplate, previewSection } from './common.ts'
 
 const schedulePreview = debounced(() => updatePartyPreview())
 
-export async function partyPanel(rebuild: () => Promise<void>): Promise<UIExtensionScriptPanel & { id: string }> {
+/** The explanation at the top of the tab in Text Adventure+. */
+export const TEXT_ADVENTURE_PARTY_NOTE =
+  'Companions speak and act for themselves; only your own character is protected. Untick "In party" for someone who is away: they stay listed but are not sent.'
+
+export async function partyPanel(
+  rebuild: () => Promise<void>,
+  note = TEXT_ADVENTURE_PARTY_NOTE,
+): Promise<UIExtensionScriptPanel & { id: string }> {
   const party = await readParty()
   updatePartyPreview(party).catch(logError)
   const edited = () => schedulePreview()
@@ -38,11 +45,7 @@ export async function partyPanel(rebuild: () => Promise<void>): Promise<UIExtens
         storageKey: `story:${PARTY.share}`,
         onChange: edited,
       },
-      {
-        type: 'text',
-        text: 'Companions speak and act for themselves; only your own character is protected. Untick "In party" for someone who is away: they stay listed but are not sent.',
-        style: MUTED,
-      },
+      { type: 'text', text: note, style: MUTED },
       ...(party.members.length > 0
         ? party.members.map((member, index) => memberPart(member, index, party.members.length, rebuild, edited))
         : [{ type: 'text' as const, text: 'No companions yet.', style: MUTED }]),

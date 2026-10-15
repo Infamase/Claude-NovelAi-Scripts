@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792083243545
-version: 0.4.0
+updatedAt: 1792085232811
+version: 0.4.1
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -28,11 +28,12 @@ memoryLimit: 8
   var OLD_STORY_KEYS = ["tap.diag.armed", "tap.diag.report", "tap.diag.step", "tap.diag.turns", "tap.diag.lastRun"];
   var IDS = {
     settingsPanel: "tap-settings",
+    playerPanel: "tap-player",
     partyPanel: "tap-party",
     inventoryPanel: "tap-inventory"
   };
   function logError(error) {
-    api.v1.error("Text Adventure+:", error);
+    api.v1.error(`${api.v1.script.name}:`, error);
   }
 
   // src/guard/text.ts
@@ -907,7 +908,7 @@ ${second}` : second;
 
   // src/ui/inventoryPanel.ts
   var schedulePreview = debounced(() => updatePreview());
-  async function inventoryPanel(rebuild2) {
+  async function inventoryPanel(rebuild) {
     const inv = await readInventory();
     updatePreview(inv).catch(logError);
     const edited = () => schedulePreview();
@@ -924,7 +925,7 @@ ${second}` : second;
           onChange: edited
         },
         moneySection(edited),
-        itemsSection(inv, rebuild2, edited),
+        itemsSection(inv, rebuild, edited),
         previewSection(INV.preview)
       ]
     };
@@ -970,23 +971,23 @@ ${second}` : second;
       ]
     };
   }
-  function itemsSection(inv, rebuild2, edited) {
+  function itemsSection(inv, rebuild, edited) {
     return {
       type: "box",
       content: [
         { type: "text", markdown: true, text: "**Items**" },
-        ...inv.items.length > 0 ? inv.items.map((item) => itemPart(item, rebuild2, edited)) : [{ type: "text", text: "Nothing yet.", style: MUTED }],
+        ...inv.items.length > 0 ? inv.items.map((item) => itemPart(item, rebuild, edited)) : [{ type: "text", text: "Nothing yet.", style: MUTED }],
         {
           type: "button",
           text: "Add item",
           iconId: "plus",
           disabledWhileCallbackRunning: true,
-          callback: () => addItem().then(rebuild2).catch(logError)
+          callback: () => addItem().then(rebuild).catch(logError)
         }
       ]
     };
   }
-  function itemPart(item, rebuild2, edited) {
+  function itemPart(item, rebuild, edited) {
     const key = (field) => `story:${INV.item(item.id, field)}`;
     return {
       type: "column",
@@ -1008,7 +1009,7 @@ ${second}` : second;
               type: "button",
               text: "Remove",
               iconId: "trash-2",
-              callback: () => removeItem(item.id).then(rebuild2).catch(logError)
+              callback: () => removeItem(item.id).then(rebuild).catch(logError)
             }
           ]
         },
@@ -1035,9 +1036,31 @@ ${second}` : second;
     await api.v1.storyStorage.set(INV.preview, forTemplate(text2));
   }
 
+  // src/ui/panelSet.ts
+  function panelSet(builders, ids) {
+    let visible = false;
+    const build = async () => {
+      const panels2 = [];
+      for (const builder of builders) panels2.push(await builder(rebuild));
+      return panels2;
+    };
+    async function rebuild() {
+      if (visible) await api.v1.ui.update(await build());
+    }
+    return {
+      async setVisible(show) {
+        if (show === visible) return;
+        if (show) await api.v1.ui.update(await build());
+        else await api.v1.ui.remove(ids);
+        visible = show;
+      }
+    };
+  }
+
   // src/ui/partyPanel.ts
   var schedulePreview2 = debounced(() => updatePartyPreview());
-  async function partyPanel(rebuild2) {
+  var TEXT_ADVENTURE_PARTY_NOTE = 'Companions speak and act for themselves; only your own character is protected. Untick "In party" for someone who is away: they stay listed but are not sent.';
+  async function partyPanel(rebuild, note = TEXT_ADVENTURE_PARTY_NOTE) {
     const party = await readParty();
     updatePartyPreview(party).catch(logError);
     const edited = () => schedulePreview2();
@@ -1053,24 +1076,20 @@ ${second}` : second;
           storageKey: `story:${PARTY.share}`,
           onChange: edited
         },
-        {
-          type: "text",
-          text: 'Companions speak and act for themselves; only your own character is protected. Untick "In party" for someone who is away: they stay listed but are not sent.',
-          style: MUTED
-        },
-        ...party.members.length > 0 ? party.members.map((member, index) => memberPart(member, index, party.members.length, rebuild2, edited)) : [{ type: "text", text: "No companions yet.", style: MUTED }],
+        { type: "text", text: note, style: MUTED },
+        ...party.members.length > 0 ? party.members.map((member, index) => memberPart(member, index, party.members.length, rebuild, edited)) : [{ type: "text", text: "No companions yet.", style: MUTED }],
         {
           type: "button",
           text: "Add companion",
           iconId: "user-plus",
           disabledWhileCallbackRunning: true,
-          callback: () => addMember().then(rebuild2).catch(logError)
+          callback: () => addMember().then(rebuild).catch(logError)
         },
         previewSection(PARTY.preview)
       ]
     };
   }
-  function memberPart(member, index, total, rebuild2, edited) {
+  function memberPart(member, index, total, rebuild, edited) {
     const key = (field) => PARTY.member(member.id, field);
     const presets = (field, words2) => words2.map((word) => ({
       type: "button",
@@ -1135,20 +1154,20 @@ ${second}` : second;
               text: "Move up",
               iconId: "arrow-up",
               disabled: index === 0,
-              callback: () => moveMember(member.id, -1).then(rebuild2).catch(logError)
+              callback: () => moveMember(member.id, -1).then(rebuild).catch(logError)
             },
             {
               type: "button",
               text: "Move down",
               iconId: "arrow-down",
               disabled: index === total - 1,
-              callback: () => moveMember(member.id, 1).then(rebuild2).catch(logError)
+              callback: () => moveMember(member.id, 1).then(rebuild).catch(logError)
             },
             {
               type: "button",
               text: "Remove",
               iconId: "trash-2",
-              callback: () => removeMember(member.id).then(rebuild2).catch(logError)
+              callback: () => removeMember(member.id).then(rebuild).catch(logError)
             }
           ]
         }
@@ -1163,19 +1182,8 @@ ${second}` : second;
   }
 
   // src/ui/storyPanels.ts
-  var visible = false;
-  async function setStoryPanelsVisible(show) {
-    if (show === visible) return;
-    if (show) await api.v1.ui.update(await storyPanels());
-    else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel]);
-    visible = show;
-  }
-  async function rebuild() {
-    if (visible) await api.v1.ui.update(await storyPanels());
-  }
-  async function storyPanels() {
-    return [await partyPanel(rebuild), await inventoryPanel(rebuild)];
-  }
+  var panels = panelSet([(rebuild) => partyPanel(rebuild), inventoryPanel], [IDS.partyPanel, IDS.inventoryPanel]);
+  var setStoryPanelsVisible = panels.setVisible;
 
   // src/ui/settingsPanel.ts
   async function registerSettingsPanel() {
