@@ -25,6 +25,9 @@ describe('findOverstep', () => {
       'You see a door to the north. You can hear water dripping somewhere.',
       'Before you can speak, she raises a claw.',
       'You are standing in a narrow cave.',
+      // A whole reply from the second playtest (v0.2.1): it stays on the dragon's side throughout,
+      // ending on sensations and reactions, which are allowed.
+      '"You\'ve trespassed," she rumbles. "I should kill you. But something... itches." She lowers her head, her nostrils flaring. "I sense... familiarity. Or perhaps it\'s something else." She draws a long breath, and the heat of it washes over you. Her gaze flicks over your body, then back to your face. "Tell me why you are here. Now." Her eyes glow like amethysts, and her jaws hang just far enough apart that the tip of her tongue darts between them. You can feel the pressure of her words like a physical thing. Your mouth goes dry. Your body feels too small.',
     ]
     for (const text of fine) it(text, () => assert.equal(cutAt(text), null))
   })

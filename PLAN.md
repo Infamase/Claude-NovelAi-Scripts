@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 1 (v0.2.1)**: the turn guard, second round after the first playtest.
+Status: **Phase 1 (v0.2.2)**: the turn guard, tuning from playtests.
 
 ---
 
@@ -182,11 +182,12 @@ dist/text-adventure-plus.naiscript   ← the file you import
 
 - **First playtest (v0.2.0):** the AI ignored the bracketed rules and wrote a whole conversation for the player character, copying the intro's style. The referee's AI call failed with an error the script showed as `[object Object]`. With Strict on, the first sentence ("You swallow hard…") was a reaction, so nothing was kept.
 - **v0.2.1 response:** plain numbered rules after the input marked as the player's action, plus a system-prompt line; readable referee errors; the referee tries the story's model, then GLM 4.6 (the API notes say script generation officially supports only GLM 4.6); a **Test the referee** button; automatic re-asking when nothing can be kept; swallowing, gulping, tensing and similar count as reactions.
+- **Second playtest (v0.2.1), with the rewritten intro:** the referee works inside a reply (Xialong, 0.5 s). The AI kept to the dragon's side and wrote no lines for the player. The referee flagged an allowed reaction ("Your mouth goes dry.") with Strict off, so v0.2.2 spells out allowed sensations and reactions with examples and asks it to flag only clear breaks.
 
 ## 11. Risks
 
 - **Hidden extra writing.** The AI keeps writing after an overstep until it finishes, so a long overstep means a longer wait. Layer 1 makes oversteps rarer, and Layer 3's cap (Phase 4) limits the wait.
-- **The referee hasn't worked inside NovelAI yet.** Its first call failed. If calling the AI from inside a reply turns out to be impossible, the fallback is to run the referee after the reply lands and trim the document (needs the `documentEdit` permission). Meanwhile, if it fails or takes over 10 seconds, the pattern rules take over and the Last turn report says why. Each check uses about 8 of the script's 2048 output tokens per 4 minutes.
+- **The referee's judgement.** It works inside a reply, but it is a model's opinion and can be too strict or too lenient. The Last turn report shows its verdict, and copied details feed prompt tuning. If it fails or takes over 10 seconds, the pattern rules take over and the report says why. Each check uses about 8 of the script's 2048 output tokens per 4 minutes.
 - **Accuracy.** The rules and the referee will sometimes cut too early or too late. The Last turn report shows exactly what was cut and why, and copied details become test cases.
 - **Persisted settings.** `generationParameters.update` saves into the story's settings, so the script always restores the original value, including on the next load if something went wrong mid-turn.
 - **Chat-endpoint models only** (Xialong, GLM 4.6). On models that use the older endpoint, these hooks don't run, so the guard does nothing there.

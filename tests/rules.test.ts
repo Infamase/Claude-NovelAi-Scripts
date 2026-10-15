@@ -72,7 +72,11 @@ describe('referee', () => {
     assert.equal(system.role, 'system')
     assert.match(user.content ?? '', /The player typed:\n"""\nYou touch the dragon\.\n"""/)
     assert.match(user.content ?? '', /\n1\. Her\?\n2\. The dragon is\.\.\. a woman\?\n/)
-    assert.match(user.content ?? '', /involuntary physical reactions/)
+    assert.match(user.content ?? '', /never a reason to flag a sentence: .*such as a dry mouth, a racing heart/)
+    assert.match(user.content ?? '', /Only flag a sentence that clearly breaks the rule/)
+    const [, strictUser] = refereePrompt({ sentences: ['x'], strict: true })
+    assert.match(strictUser.content ?? '', /not even physical reactions or sensations/)
+    assert.doesNotMatch(strictUser.content ?? '', /dry mouth/)
   })
 
   it('reads its answer', () => {

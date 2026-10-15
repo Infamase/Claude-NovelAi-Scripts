@@ -34,9 +34,11 @@ export function isRefereeRunning(): boolean {
 }
 
 export function refereePrompt({ storyTail, playerInput, sentences, strict }: RefereeInput): Message[] {
+  // Playtesting showed the referee flagging "Your mouth goes dry." with reactions allowed, so the
+  // allowed cases are spelled out with examples, and flagging needs a clear break of the rule.
   const allowed = strict
-    ? 'Allowed: carrying out exactly what the player typed, and what the player character sees and hears. Nothing else about the player character, not even physical reactions.'
-    : 'Allowed: carrying out what the player typed, what the player character sees and hears, and involuntary physical reactions such as a flinch or a racing heart.'
+    ? 'Allowed: carrying out exactly what the player typed, and what the player character sees and hears. Nothing else about the player character, not even physical reactions or sensations.'
+    : 'Allowed, and never a reason to flag a sentence: carrying out what the player typed; what the player character sees, hears, smells or physically feels; and involuntary bodily reactions and sensations, such as a dry mouth, a racing heart, a flinch, a shiver, a tightening chest, or feeling heat or pressure.'
   const user = [
     'Story just before the player\'s turn:',
     '"""',
@@ -58,7 +60,7 @@ export function refereePrompt({ storyTail, playerInput, sentences, strict }: Ref
     '- asking the player what they do, offering them choices, or speaking to the player directly',
     allowed,
     '',
-    'Answer with the sentence number only, or 0 if no sentence breaks the rule.',
+    'Only flag a sentence that clearly breaks the rule. Answer with the sentence number only, or 0 if no sentence breaks the rule.',
   ].join('\n')
   return [
     {
