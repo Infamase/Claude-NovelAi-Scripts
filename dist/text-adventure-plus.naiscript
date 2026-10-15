@@ -1,0 +1,424 @@
+/*---
+compatibilityVersion: naiscript-1.0
+id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
+name: Text Adventure+
+createdAt: 1792063961849
+updatedAt: 1792064243612
+version: 0.1.0
+author: Infamase
+description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
+memoryLimit: 8
+---*/
+"use strict";
+(() => {
+  // src/guard/text.ts
+  var TERMINATORS = ".!?…";
+  var CLOSERS = `"'”’)]*_`;
+  var ABBREVIATIONS = /* @__PURE__ */ new Set([
+    "mr",
+    "mrs",
+    "ms",
+    "dr",
+    "st",
+    "sr",
+    "jr",
+    "mt",
+    "vs",
+    "etc",
+    "prof",
+    "capt",
+    "gen",
+    "lt",
+    "sgt",
+    "col"
+  ]);
+  function findSentenceEnd(text) {
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === "\n") {
+        if (text.slice(0, i).trim() !== "") return i;
+        continue;
+      }
+      if (!TERMINATORS.includes(ch)) continue;
+      let end = i + 1;
+      while (end < text.length && TERMINATORS.includes(text[end])) end++;
+      while (end < text.length && CLOSERS.includes(text[end])) end++;
+      if (end >= text.length) return -1;
+      if (!isSpace(text[end]) || ch === "." && isAbbreviation(text, i)) {
+        i = end - 1;
+        continue;
+      }
+      let next = end;
+      while (next < text.length && isSpace(text[next])) {
+        if (text[next] === "\n") return end;
+        next++;
+      }
+      if (next >= text.length) return -1;
+      if (/\p{Ll}/u.test(text[next])) {
+        i = next - 1;
+        continue;
+      }
+      return end;
+    }
+    return -1;
+  }
+  function chunksCovering(chunks, length) {
+    let total = 0;
+    let count = 0;
+    while (count < chunks.length && total < length) {
+      total += chunks[count].length;
+      count++;
+    }
+    return count;
+  }
+  function truncateChunks(chunks, length) {
+    let remaining = length;
+    return chunks.map((chunk) => {
+      const kept = chunk.slice(0, Math.max(0, remaining));
+      remaining -= chunk.length;
+      return kept;
+    });
+  }
+  function isSpace(ch) {
+    return ch === " " || ch === "\n" || ch === "	" || ch === "\r";
+  }
+  function isAbbreviation(text, dotIndex) {
+    const word = /([A-Za-z]+)$/.exec(text.slice(Math.max(0, dotIndex - 12), dotIndex))?.[1];
+    if (!word) return false;
+    if (word.length === 1) return word !== "I" && word === word.toUpperCase();
+    return ABBREVIATIONS.has(word.toLowerCase());
+  }
+
+  // src/keys.ts
+  var KEYS = {
+    enabled: "tap.enabled",
+    diagArmed: "tap.diag.armed",
+    diagReport: "tap.diag.report",
+    diagLastRun: "tap.diag.lastRun"
+  };
+  var IDS = {
+    settingsPanel: "tap-settings",
+    partyPanel: "tap-party",
+    inventoryPanel: "tap-inventory"
+  };
+  function logError(error) {
+    api.v1.error("Text Adventure+:", error);
+  }
+
+  // src/diagnostics/stopTest.ts
+  var HELP = [
+    "Checks how NovelAI reacts when the script cuts a response short. The result decides how Phase 1 is built.",
+    "",
+    "1. Tick the box below.",
+    "2. Take one normal turn with the Do/Say box. Pick an action that should get several sentences back.",
+    "3. The script lets the first sentence through, cuts the response after the second, and checks what reached the editor.",
+    "4. Press **Copy report** and paste the report to Claude.",
+    "",
+    "The turn will look cut short. That is expected; undo it afterwards if you like."
+  ].join("\n");
+  var lastTaInput;
+  var run;
+  async function initDiagnostics() {
+    await api.v1.storyStorage.setIfAbsent(KEYS.diagReport, "No test run yet.");
+  }
+  function registerDiagnosticsHooks() {
+    api.v1.hooks.register("onTextAdventureInput", ({ continuityId, mode, inputText, rawInputText }) => {
+      lastTaInput = { continuityId, mode, inputText, rawInputText };
+    });
+    api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model, scriptInitiated }) => {
+      if (await api.v1.storyStorage.get(KEYS.diagArmed) !== true) return;
+      const settings = await api.v1.generationParameters.get().catch(() => void 0);
+      run = {
+        continuityId,
+        startedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        model,
+        scriptInitiated,
+        maxTokens: settings?.max_tokens,
+        taInput: lastTaInput,
+        responseCalls: 0,
+        heldCalls: 0,
+        released: "",
+        callsAfterStop: 0,
+        endedEarly: false,
+        finalSeen: false,
+        generationEnded: false
+      };
+    });
+    api.v1.hooks.register("onContextBuilt", ({ continuityId, dryRun, messages }) => {
+      if (run?.continuityId === continuityId && !dryRun) run.context = summarizeMessages(messages);
+    });
+    api.v1.hooks.register("onResponse", onResponse);
+    api.v1.hooks.register("onGenerationEnd", async ({ continuityId }) => {
+      if (!run || run.continuityId !== continuityId) return;
+      run.generationEnded = true;
+      await finish(run);
+    });
+  }
+  var onResponse = ({ continuityId, text, final }) => {
+    const r = run;
+    if (!r || r.continuityId !== continuityId) return;
+    r.responseCalls++;
+    if (final) r.finalSeen = true;
+    if (r.cutText !== void 0) {
+      r.callsAfterStop++;
+      return { text: text.map(() => ""), stopGeneration: true };
+    }
+    if (r.endedEarly) return;
+    const joined = text.join("");
+    const end = findSentenceEnd(joined);
+    if (end < 0 || !r.released && final) {
+      if (final) {
+        r.endedEarly = true;
+        return;
+      }
+      r.heldCalls++;
+      return { seenData: 0 };
+    }
+    if (!r.released) {
+      const count = chunksCovering(text, end);
+      r.released = text.slice(0, count).join("");
+      return { seenData: count };
+    }
+    r.cutText = joined.slice(0, end);
+    r.cutOnFinal = final;
+    api.v1.timers.setTimeout(() => {
+      if (!r.generationEnded) finish(r).catch(logError);
+    }, 3e3).catch(logError);
+    return { text: truncateChunks(text, end), stopGeneration: true };
+  };
+  async function finish(r) {
+    const doc = await readDocument();
+    const verdict = judge(r, doc.text);
+    await api.v1.storyStorage.set(KEYS.diagReport, formatReport(r, verdict, doc.tail));
+    await api.v1.storyStorage.set(KEYS.diagLastRun, r);
+    const conclusive = r.cutText !== void 0 || r.responseCalls === 0;
+    if (conclusive) await api.v1.storyStorage.set(KEYS.diagArmed, false);
+    await api.v1.ui.toast(
+      conclusive ? "Stop test finished. The report is in the Text Adventure+ sidebar panel." : "Stop test inconclusive. It is still armed; see the sidebar panel.",
+      { type: conclusive ? "success" : "warning" }
+    );
+  }
+  async function recheck() {
+    const r = run ?? await api.v1.storyStorage.get(KEYS.diagLastRun);
+    if (!r) {
+      await api.v1.ui.toast("No stop test has run in this story yet.", { type: "info" });
+      return;
+    }
+    await finish(r);
+  }
+  async function copyReport() {
+    const granted = await api.v1.permissions.request(
+      "clipboardWrite",
+      "Text Adventure+ needs clipboard access to copy the stop test report."
+    );
+    if (!granted) return;
+    const report = await api.v1.storyStorage.get(KEYS.diagReport);
+    await api.v1.clipboard.writeText(String(report ?? ""));
+    await api.v1.ui.toast("Report copied.", { type: "success" });
+  }
+  function judge(r, documentText) {
+    if (r.responseCalls === 0) {
+      return "FAIL: onResponse never ran. The live cut-off needs GLM 4.6; check which model this story uses.";
+    }
+    if (r.cutText === void 0) {
+      if (r.responseCalls === 1) {
+        return "INCONCLUSIVE: the whole response arrived at once. Streaming may be off; turn it on and take another turn.";
+      }
+      return "INCONCLUSIVE: the response ended before two full sentences. The test is still armed; take another, longer turn.";
+    }
+    const doc = normalize(documentText);
+    const released = normalize(r.released);
+    const cut = normalize(r.cutText);
+    if (doc.endsWith(normalize(r.released + r.cutText))) {
+      return "PASS: the early text stayed, the trimmed text sent with the stop landed, and nothing came after the cut.";
+    }
+    const at = released ? doc.lastIndexOf(released) : -1;
+    if (at < 0) {
+      return "UNKNOWN: the text released before the cut is not in the document. Was the story edited or undone before the check?";
+    }
+    const after = doc.slice(at + released.length).trim();
+    if (after === "") return "PARTIAL: the early text landed, but the trimmed text sent with the stop was dropped.";
+    if (after.startsWith(cut)) {
+      return `PARTIAL: the stop did not fully halt. Extra text came after the cut point: ${quote(after.slice(cut.length), 120)}`;
+    }
+    return `UNKNOWN: unexpected text after the early part: ${quote(after, 120)}`;
+  }
+  function formatReport(r, verdict, documentTail) {
+    const yesNo = (value) => value ? "yes" : "no";
+    const ta = r.taInput;
+    const lines = [
+      `Text Adventure+ stop test (v${api.v1.script.version})`,
+      `Run: ${r.startedAt}`,
+      `Result: ${verdict}`,
+      "",
+      `Model: ${r.model} | max_tokens: ${r.maxTokens ?? "unknown"} | script-initiated: ${yesNo(r.scriptInitiated)}`,
+      `onResponse calls: ${r.responseCalls} (held back ${r.heldCalls}, after stop ${r.callsAfterStop}) | final call seen: ${yesNo(r.finalSeen)} | onGenerationEnd fired: ${yesNo(r.generationEnded)}`,
+      `Released before cut: ${quote(r.released, 200)}`,
+      `Sent with stop: ${r.cutText === void 0 ? "(never reached)" : quote(r.cutText, 200)} | on final call: ${yesNo(r.cutOnFinal === true)}`,
+      ta ? `TA input: ${ta.mode} | input ${quote(ta.inputText, 80)} | raw ${quote(ta.rawInputText, 80)} | same turn: ${yesNo(ta.continuityId === r.continuityId)}` : "TA input: none recorded",
+      "",
+      "Context sent to the AI:",
+      ...r.context ?? ["(not recorded)"],
+      "",
+      "End of document:",
+      ...documentTail
+    ];
+    return lines.join("\n").replace(/\{\{/g, "{ {");
+  }
+  async function readDocument() {
+    const sections = await api.v1.document.scan();
+    const text = sections.map(({ section }) => section.text).join("\n");
+    const tail = sections.slice(-5).map(({ section }) => {
+      const origins = [...new Set(section.origin.map((o) => o.data))].join("+") || "none";
+      return `[${section.source ?? "story"} | ${origins}] ${quote(section.text, 160)}`;
+    });
+    return { text, tail };
+  }
+  function summarizeMessages(messages) {
+    return messages.map((m, i) => {
+      const content = m.content ?? "";
+      return `#${i} ${m.role}, ${content.length} chars: starts ${quote(content.slice(0, 80), 80)} … ends ${quote(content, 160)}`;
+    });
+  }
+  function normalize(text) {
+    return text.replace(/\s+/g, " ").trim();
+  }
+  function quote(text, max) {
+    return JSON.stringify(text.length > max ? "…" + text.slice(-max) : text);
+  }
+  function diagnosticsSection() {
+    return {
+      type: "collapsibleSection",
+      title: "Diagnostics: stop test",
+      iconId: "activity",
+      content: [
+        { type: "text", markdown: true, text: HELP },
+        {
+          type: "checkboxInput",
+          label: "Run the stop test on my next turn",
+          storageKey: `story:${KEYS.diagArmed}`
+        },
+        {
+          type: "row",
+          spacing: "start",
+          content: [
+            {
+              type: "button",
+              text: "Check result now",
+              iconId: "refresh",
+              disabledWhileCallbackRunning: true,
+              callback: () => recheck().catch(logError)
+            },
+            {
+              type: "button",
+              text: "Copy report",
+              iconId: "copy",
+              callback: () => copyReport().catch(logError)
+            }
+          ]
+        },
+        {
+          type: "text",
+          text: `{{story:${KEYS.diagReport}}}`,
+          style: { whiteSpace: "pre-wrap", fontSize: "0.85em" }
+        }
+      ]
+    };
+  }
+
+  // src/ui/storyPanels.ts
+  var visible = false;
+  async function setStoryPanelsVisible(show) {
+    if (show === visible) return;
+    if (show) await api.v1.ui.register([partyPanel(), inventoryPanel()]);
+    else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel]);
+    visible = show;
+  }
+  function partyPanel() {
+    return {
+      type: "scriptPanel",
+      id: IDS.partyPanel,
+      name: "Party",
+      iconId: "users",
+      content: [
+        {
+          type: "text",
+          markdown: true,
+          text: [
+            "**Party** (coming in Phase 3)",
+            "",
+            "Your companions will be listed here with their role, status (healthy, wounded…), attitude toward you and notes. Members marked *in party* are added to the AI's context every turn, like this:",
+            "",
+            "`[ Party: Lyra (elf ranger; wounded; trusts you) ]`"
+          ].join("\n")
+        }
+      ]
+    };
+  }
+  function inventoryPanel() {
+    return {
+      type: "scriptPanel",
+      id: IDS.inventoryPanel,
+      name: "Inventory",
+      iconId: "package",
+      content: [
+        {
+          type: "text",
+          markdown: true,
+          text: [
+            "**Inventory** (coming in Phase 2)",
+            "",
+            "Your currency, items with quantities, and what you have equipped will be tracked here and added to the AI's context every turn, like this:",
+            "",
+            "`[ Equipped: iron sword ]`  ",
+            "`[ Carrying: healing potion ×3, rope; 45 gold ]`"
+          ].join("\n")
+        }
+      ]
+    };
+  }
+
+  // src/ui/settingsPanel.ts
+  async function registerSettingsPanel() {
+    await api.v1.ui.register([
+      {
+        type: "sidebarPanel",
+        id: IDS.settingsPanel,
+        name: "Text Adventure+",
+        iconId: "compass",
+        content: [
+          {
+            type: "text",
+            markdown: true,
+            text: `**Text Adventure+** v${api.v1.script.version} (Phase 0 preview)`
+          },
+          {
+            type: "checkboxInput",
+            label: "Enable for this story",
+            storageKey: `story:${KEYS.enabled}`,
+            onChange: (on) => {
+              setStoryPanelsVisible(on).catch(logError);
+            }
+          },
+          {
+            type: "text",
+            text: "When enabled, Party and Inventory tabs appear above the bottom controls.",
+            style: { opacity: 0.7 }
+          },
+          diagnosticsSection()
+        ]
+      }
+    ]);
+  }
+
+  // src/main.ts
+  async function init() {
+    await initDiagnostics();
+    await registerSettingsPanel();
+    const enabled = await api.v1.storyStorage.get(KEYS.enabled) === true;
+    await setStoryPanelsVisible(enabled);
+    api.v1.log(`Text Adventure+ v${api.v1.script.version} loaded (enabled for this story: ${enabled})`);
+  }
+  registerDiagnosticsHooks();
+  init().catch(logError);
+})();

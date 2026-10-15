@@ -1,0 +1,26 @@
+{
+  "name": "text-adventure-plus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NovelAI user script: stops Text Adventure output at your turn, plus Party and Inventory tabs.",
+  "type": "module",
+  "naiscript": {
+    "id": "37ab87de-bafd-4cf2-8fc1-3ce1741c8677",
+    "name": "Text Adventure+",
+    "author": "Infamase",
+    "description": "Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.",
+    "createdAt": 1792063961849,
+    "memoryLimit": 8,
+    "output": "dist/text-adventure-plus.naiscript"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

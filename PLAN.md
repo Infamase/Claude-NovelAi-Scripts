@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **planning**. Nothing is built yet.
+Status: **Phase 0 built (v0.1.0)**. Waiting on the in-NovelAI checks (see README).
 
 ---
 
@@ -20,12 +20,14 @@ Status: **planning**. Nothing is built yet.
 | How much the AI may write about your character | Default: **reactions allowed**. Sensations and involuntary reactions are fine ("the ale burns your throat; you cough"). New speech, decisions and deliberate actions are cut. A toggle switches to **strict** (the world and NPCs only). |
 | Inventory/Party updates | **Manual in v1.** You edit the tabs yourself. Auto-tracking is a later phase. |
 | v1 tracking extras | Item **quantities**, **equipped** items, a **currency** counter, and per-member party **status** and **attitude**. |
+| Companions | **Act freely.** They can speak and take actions on their own like any NPC. Only *your* character is protected. |
+| "What do you do?" prompts | **Abolished.** The AI is told never to write them, and any that slip through are cut. |
+| Name | **Text Adventure+** |
 
 ## 3. Assumptions (say so if any are wrong)
 
 - **Account script.** It is imported once and available in every story, but stays inactive until you switch it on for a story. The API has no way to check "is this a Text Adventure story?", so a per-story toggle is the reliable option.
 - **NovelAI's own Do/Say/Story input box stays.** The script hooks into it (`onTextAdventureInput`) instead of replacing it.
-- **Companions behave like NPCs.** They can speak and act in the AI's narration. Only *your* character is protected.
 - **Manual edits are permanent.** If you add an item and then undo or retry a turn, the item stays. History-linked state comes in with auto-tracking later.
 - **Second person** ("You…"), as in standard Text Adventure.
 
@@ -39,7 +41,7 @@ This is the core feature. A model can't be given a "dynamic length" directly, so
 Before every generation the script adds a short **narrator rules** message to the context (`onContextBuilt`, which only runs on GLM). The rules tell the AI to:
 - narrate only the consequences of the player's latest action, including how NPCs and companions react;
 - never write the player character's dialogue, decisions or deliberate actions (in strict mode, nothing about the player character at all);
-- end the response at the first moment the player needs to decide something.
+- end the response at the first moment the player needs to decide something, and end it silently: never ask what the player does, never offer choices, never speak to the player directly.
 
 The rules sit near the end of the context, where instructions carry the most weight. You can check the exact text in NovelAI's own Context viewer.
 
@@ -57,7 +59,7 @@ The script watches the streamed text (`onResponse`):
 | Player speech | `You say, "…"`, `"…," you reply` | cut |
 | Player decision or deliberate action | `You decide to…`, `You draw your sword and…` | cut |
 | Player sensation or involuntary reaction | `You feel warm.`, `You cough.` | allowed in *reactions* mode, cut in *strict* |
-| End-of-turn prompt | `What do you do?` | keep (or strip, via a setting), then stop |
+| End-of-turn prompt, in any form | `What do you do?`, `What's your next move?`, `The choice is yours.`, `Will you fight or flee?` | always cut, then stop |
 
 Reactions mode works from a list of allowed verbs (feel, notice, hear, see, smell, taste, cough, wince, shiver, flinch…). Any other "You + verb" sentence counts as an action.
 
@@ -114,7 +116,6 @@ Settings live in a **right-sidebar panel**, which keeps the bottom bar for Party
 - Enable for this story
 - Player-character rule: Reactions / Strict
 - Length cap: on/off, plus short and long sizes
-- End-of-turn prompts ("What do you do?"): keep / strip
 - Debug log, to help with tuning
 
 ---
@@ -165,7 +166,4 @@ dist/text-adventure-plus.naiscript   ← the file you import
 
 ## 12. Open questions (answer whenever)
 
-1. **Companions:** may they act freely (the current assumption), or only react to you?
-2. **"What do you do?" prompts:** keep them, strip them, or tell the AI never to write them?
-3. **Bad examples:** paste 3–5 real turns where the AI overstepped, with your input. These become the first test cases.
-4. **Name:** keep "Text Adventure+" or choose something else?
+1. **Bad examples (when you have them):** paste 3–5 real turns where the AI overstepped, with your input. These become the first test cases.
