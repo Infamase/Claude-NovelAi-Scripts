@@ -9,6 +9,9 @@ const setting = (more: Partial<Setting> = {}): Setting => ({
   location: '',
   time: '',
   canon: true,
+  changes: '',
+  absent: '',
+  cutAbsent: true,
   notes: '',
   ...more,
 })
@@ -36,13 +39,31 @@ describe('settingLines', () => {
     assert.deepEqual(settingLines(setting({ world: 'Aerth, an original world', canon: false })), ['Setting: Aerth, an original world.'])
   })
 
+  it('lists the changes from canon and who is not in the story on their own lines, overriding canon', () => {
+    assert.deepEqual(
+      settingLines(
+        setting({
+          world: 'the Naruto universe',
+          changes: 'Naruto Uzumaki died as a baby in the Nine-Tails attack.\nTeam 7 is Sasuke, Sakura and Sai',
+          absent: 'Naruto Uzumaki, the Nine-Tails jinchuriki',
+        }),
+      ),
+      [
+        'Setting: the Naruto universe. Keep to the established canon of this world (its lore, history, technology and characters), except for the changes listed here, which override it.',
+        'Changes from canon: Naruto Uzumaki died as a baby in the Nine-Tails attack. Team 7 is Sasuke, Sakura and Sai. Everything that follows from these changes is different too, and the characters know only the world as it is now.',
+        'Not in this story: Naruto Uzumaki. Leave them out entirely: they never appear, speak or act, and no one mentions them.',
+      ],
+    )
+    assert.match(settingLines(setting({ absent: 'Naruto Uzumaki\nJiraiya' }))[0], /^Not in this story: Naruto Uzumaki; Jiraiya\. Leave all of them out/)
+  })
+
   it('mentions canon only with a world', () => {
     assert.deepEqual(settingLines(setting({ location: 'a ruined abbey' })), ['Current location: a ruined abbey.'])
   })
 
   it('sends nothing when empty or when sharing is off', () => {
     assert.deepEqual(settingLines(setting()), [])
-    assert.deepEqual(settingLines(setting({ world: 'Mass Effect', share: false })), [])
+    assert.deepEqual(settingLines(setting({ world: 'Mass Effect', absent: 'Shepard', share: false })), [])
   })
 })
 

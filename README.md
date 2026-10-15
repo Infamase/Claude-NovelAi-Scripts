@@ -36,7 +36,7 @@ How each turn works:
 
 ---
 
-## Story Adventure+ (v0.2.0)
+## Story Adventure+ (v0.3.0)
 
 For Story mode: you and the AI write the story together, and the AI may write what "you" do. There is no turn guard.
 
@@ -51,7 +51,7 @@ For Story mode: you and the AI write the story together, and the AI may write wh
 - **Second person, present tense**: the point-of-view rule and reminder. On by default.
 - **Catch slips**: the check described above (only while Second person, present tense is on). On by default. Sentences that look like they might slip wait until the reply is finished, so if your replies stream in word by word, they may arrive a few sentences at a time instead.
 - **Use the writing guide**, and **Writing guide**: the guide's text. Edit it as you like; **Reset to default** brings back the original. If you never edit it, it updates with new versions of the script.
-- **Last reply**: what was kept, where the cut was and why. **Copy details** copies the reply sentence by sentence, with the tense count for each. Send it to Claude when a reply was cut wrongly or a slip got through.
+- **Last reply**: what was kept, where the cut was and why (a slip, or a mention of someone not in the story). **Copy details** copies the reply sentence by sentence, with the tense count for each. Send it to Claude when a reply was cut wrongly or a slip got through.
 
 The model copies the story's own style strongly, so start the story in second person, present tense, and fix any slip that gets into the story by hand.
 
@@ -66,10 +66,15 @@ The tabs appear only in stories where the script is enabled. Update them yoursel
 - **World**: the world or universe ("the Mass Effect universe", or your own world's name and a few words about it).
 - **Current location** ("Illium, the Nos Astra trading floor"). Update it as you travel.
 - **Time period** ("2186, during the events of Mass Effect 3").
-- **Keep to the world's canon** (on by default): for a world from a book, game, film or show, the AI is told to keep to its lore, history, technology and characters, except where your notes say otherwise. It's only sent when World is filled in.
-- **Notes**: tone, rules of the world, what has happened so far, and anything that differs from canon.
+- **Keep to the world's canon** (on by default): for a world from a book, game, film or show, the AI is told to keep to its lore, history, technology and characters, except for your changes. It's only sent when World is filled in.
+- **Changes from canon**: what's different in your version of the world, which overrides canon. Say what happened instead, not only what didn't, because the AI fills any gap with canon: "Naruto Uzumaki died as a baby in the Nine-Tails attack. Team 7 is Sasuke, Sakura and Sai, under Kakashi."
+- **Not in this story**: anyone (or anything) the AI must leave out entirely, one per line, with other names after commas: `Naruto Uzumaki, the Nine-Tails jinchuriki`. The AI is told they never appear, speak, act or get mentioned.
+- **Cut replies that mention them** (on by default): a reply is also cut before the first sentence that names anyone on the list, in narration or dialogue, and the AI is asked again if nothing is left (up to twice). Names match as typed, as whole words, so "Naruto" doesn't catch "narutomaki"; a first-and-last name also counts by its first name ("Naruto"). The preview lists every name that cuts. This works even with Second person, present tense off.
+- **Notes**: tone, rules of the world, what has happened so far.
 
-It goes first in the game state, so the AI reads where and when before who.
+It goes first in the game state, so the AI reads where and when before who. The changes and the "Not in this story" list each get their own line, so they stand out.
+
+For a world the AI knows well, it helps to leave the missing character's name out of your memory, Lorebook and the story itself where you can. Every mention reminds the AI of them.
 
 ### Player (Story Adventure+)
 

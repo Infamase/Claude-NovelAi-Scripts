@@ -99,7 +99,18 @@ describe('Setting tab', () => {
     await setStoryPanelsVisible(true)
     const all = parts(mock, IDS.settingPanel)
     const labels = all.map((p) => p.label ?? p.title ?? p.text)
-    for (const label of ['Tell the AI about the setting', 'World', 'Current location', 'Time period', "Keep to the world's canon", 'Notes', 'What the AI sees']) {
+    for (const label of [
+      'Tell the AI about the setting',
+      'World',
+      'Current location',
+      'Time period',
+      "Keep to the world's canon",
+      'Changes from canon',
+      'Not in this story',
+      'Cut replies that mention them',
+      'Notes',
+      'What the AI sees',
+    ]) {
       assert.ok(labels.includes(label), label)
     }
     assert.match(String(mock.story.get(SETTING.preview)), /^Nothing yet/)
@@ -112,6 +123,12 @@ describe('Setting tab', () => {
       mock.story.get(SETTING.preview),
       'Game state (keep the story consistent with it):\n- Setting: the Mass Effect universe. Current location: Illium. Keep to the established canon of this world (its lore, history, technology and characters).',
     )
+
+    // The preview also says which names cut a reply.
+    mock.story.set(SETTING.field('absent'), 'Commander Shepard, Shepard')
+    all.find((p) => p.label === 'Not in this story').onChange('Commander Shepard, Shepard')
+    await mock.runTimers()
+    assert.match(String(mock.story.get(SETTING.preview)), /- Not in this story: Commander Shepard\. .*\n\nReplies are cut at any mention of: Commander Shepard, Shepard\.$/)
   })
 })
 

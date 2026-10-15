@@ -1,8 +1,8 @@
 // Story Adventure+'s hooks. Before each reply they add the point-of-view rule and the writing guide
 // to the system prompt, and the game state (setting, player, party, inventory) with a reminder just
-// before the story. With "Catch slips"
-// on, they also check the reply as it streams in and keep back the part that slips out of second
-// person, present tense.
+// before the story. They also check the reply as it streams in, and keep back the part from the
+// first sentence that slips out of second person, present tense ("Catch slips"), or that mentions
+// someone the Setting tab says is not in the story.
 //
 // A script can't stop a generation early: NovelAI then discards the whole reply. So the check holds
 // back chunks with `seenData` instead. Sentences that are clearly fine are let through as they
@@ -14,12 +14,13 @@ import { gameStateBlock } from '../state/gameState.ts'
 import { inventoryLines, readInventory } from '../state/inventory.ts'
 import { partyLines, readParty } from '../state/party.ts'
 import { playerLines, readPlayer } from '../state/player.ts'
-import { readSetting, settingLines } from '../state/setting.ts'
+import { absentList, readSetting, settingLines } from '../state/setting.ts'
+import { findMention, type Absent } from '../state/absent.ts'
 import { text as textOf } from '../state/store.ts'
 import { sliceChunks, splitSentences, type Sentence } from '../guard/text.ts'
 import { KEYS } from './keys.ts'
 import { storyNote, systemAddition, withStoryPrompt } from './prompt.ts'
-import { checkSentences, findSlip, mightSlip, type SentenceCheck, type Slip } from './slips.ts'
+import { checkSentences, findSlip, mightSlip, type SentenceCheck } from './slips.ts'
 
 /** How many times in a row the script asks again when nothing of a reply could be kept. */
 const MAX_AUTO_RETRIES = 2
@@ -33,21 +34,32 @@ export type StorySettings = {
   guide: string
 }
 
-type Reply = StorySettings & {
-  model: string
+/** What a reply is checked for. */
+export type CheckOptions = {
+  /** Slips out of second person, present tense. */
+  slips: boolean
   /** The protagonist's name, to catch narration that uses it instead of "you". */
   name: string
-  /** The part of the reply already let through to the editor. */
-  released: string
-  /** Set when nothing could be kept and the script will ask again: which retry this will be. */
-  retryNumber?: number
+  /** Who is not in this story; a mention cuts the reply. */
+  absent: Absent[]
 }
 
-export type SlipDecision = {
+type Reply = StorySettings &
+  CheckOptions & {
+    model: string
+    /** The part of the reply already let through to the editor. */
+    released: string
+    /** Set when nothing could be kept and the script will ask again: which retry this will be. */
+    retryNumber?: number
+  }
+
+export type Cut = { index: number; reason: string; kind: 'slip' | 'absent' }
+
+export type ReplyDecision = {
   reply: string
   sentences: Sentence[]
   checks: SentenceCheck[]
-  slip?: Slip
+  cut?: Cut
   /** How many characters of the reply reach the editor. */
   keep: number
 }
@@ -61,7 +73,16 @@ export function registerStoryHooks(): void {
   api.v1.hooks.register('onGenerationRequested', async ({ continuityId, model, inlineGeneration, toolboxMode, scriptInitiated }) => {
     if (inlineGeneration || toolboxMode || !(await isEnabled())) return
     if (!scriptInitiated) retriesInARow = 0
-    replies.set(continuityId, { model, ...(await readSettings()), name: (await readPlayer()).name, released: '' })
+    const settings = await readSettings()
+    const setting = await readSetting()
+    replies.set(continuityId, {
+      model,
+      ...settings,
+      slips: settings.pov && settings.check,
+      name: (await readPlayer()).name,
+      absent: setting.cutAbsent ? absentList(setting) : [],
+      released: '',
+    })
   })
 
   api.v1.hooks.register('onBeforeContextBuild', async ({ continuityId, model, dryRun }) => {
@@ -88,16 +109,16 @@ export function registerStoryHooks(): void {
 
   api.v1.hooks.register('onResponse', async ({ continuityId, text, final }) => {
     const reply = replies.get(continuityId)
-    if (!reply || !reply.pov || !reply.check) return
+    if (!reply || (!reply.slips && reply.absent.length === 0)) return
     const full = reply.released + text.join('')
     if (!final) {
-      const count = chunksWithin(text, releasable(full, reply.name) - reply.released.length)
+      const count = chunksWithin(text, releasable(full, reply) - reply.released.length)
       reply.released += text.slice(0, count).join('')
       return { seenData: count }
     }
 
-    const decision = decideSlips(full, reply.name)
-    // A slip can only start after the part already let through, but never cut into that part.
+    const decision = decideReply(full, reply)
+    // A cut can only come after the part already let through, but never cut into that part.
     const keep = (decision.keep = Math.max(decision.keep, reply.released.length))
     if (keptNothing(decision)) {
       if (retriesInARow < MAX_AUTO_RETRIES) reply.retryNumber = retriesInARow + 1
@@ -129,26 +150,38 @@ export async function gameStateText(): Promise<string | undefined> {
   ])
 }
 
-/** Decides how much of a finished reply to keep: everything before the first slip. */
-export function decideSlips(reply: string, name = ''): SlipDecision {
+const ALL_CHECKS: CheckOptions = { slips: true, name: '', absent: [] }
+
+/** Decides how much of a finished reply to keep: everything before the first slip or mention. */
+export function decideReply(reply: string, options: Partial<CheckOptions> = {}): ReplyDecision {
+  const { slips, name, absent } = { ...ALL_CHECKS, ...options }
   const sentences = splitSentences(reply)
   const checks = checkSentences(reply, sentences, name)
-  const slip = findSlip(checks)
-  let keep = slip ? sentences[slip.index].start : reply.length
-  if (slip) while (keep > 0 && /\s/.test(reply[keep - 1])) keep--
-  return { reply, sentences, checks, slip, keep }
+  const slip = slips ? findSlip(checks) : undefined
+  const mention = findMention(reply, sentences, absent)
+  let cut: Cut | undefined = slip && { ...slip, kind: 'slip' }
+  if (mention && (!cut || mention.index <= cut.index)) {
+    const who = mention.variant === mention.name ? `"${mention.name}"` : `"${mention.variant}" (${mention.name})`
+    cut = { index: mention.index, reason: `mentions ${who}, who is not in this story`, kind: 'absent' }
+  }
+  let keep = cut ? sentences[cut.index].start : reply.length
+  if (cut) while (keep > 0 && /\s/.test(reply[keep - 1])) keep--
+  return { reply, sentences, checks, cut, keep }
 }
 
 /**
  * How much of a reply still being written can be let through: everything before the first
- * sentence that might start a slip, and never the last sentence, which may not be finished.
+ * sentence that might start a slip or that mentions someone who is not in the story, and never
+ * the last sentence, which may not be finished.
  */
-export function releasable(reply: string, name = ''): number {
+export function releasable(reply: string, options: Partial<CheckOptions> = {}): number {
+  const { slips, name, absent } = { ...ALL_CHECKS, ...options }
   const sentences = splitSentences(reply)
   if (sentences.length === 0) return 0
   const checks = checkSentences(reply, sentences, name)
+  const mention = findMention(reply, sentences, absent)?.index ?? sentences.length
   let index = 0
-  while (index < sentences.length - 1 && !mightSlip(checks[index])) index++
+  while (index < sentences.length - 1 && index < mention && !(slips && mightSlip(checks[index]))) index++
   return sentences[index].start
 }
 
@@ -163,38 +196,41 @@ function chunksWithin(chunks: string[], length: number): number {
   return count
 }
 
-function keptNothing(decision: SlipDecision): boolean {
+function keptNothing(decision: ReplyDecision): boolean {
   return decision.reply.trim() !== '' && decision.reply.slice(0, decision.keep).trim() === ''
 }
 
-async function report(reply: Reply, decision: SlipDecision): Promise<void> {
+async function report(reply: Reply, decision: ReplyDecision): Promise<void> {
   await api.v1.storyStorage.set(KEYS.lastReplyStatus, sanitize(statusText(decision, reply)))
   await api.v1.storyStorage.set(KEYS.lastReplyDetails, sanitize(detailsText(reply, decision)))
   if (!keptNothing(decision)) return
   if (reply.retryNumber !== undefined) {
     await api.v1.ui.toast(
-      `Story Adventure+: the reply slipped out of second person, present tense from its first sentence, so it was dropped. Asking again (${reply.retryNumber} of ${MAX_AUTO_RETRIES})…`,
+      `Story Adventure+: the reply's first sentence ${decision.cut?.reason}, so it was dropped. Asking again (${reply.retryNumber} of ${MAX_AUTO_RETRIES})…`,
       { type: 'info' },
     )
   } else {
-    await api.v1.ui.toast(
-      `Story Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. Check that the story so far is in second person, present tense, or turn off Catch slips.`,
-      { type: 'warning' },
-    )
+    const advice =
+      decision.cut?.kind === 'absent'
+        ? 'The story may be leading the AI to them: steer it elsewhere, or untick "Cut replies that mention them" in the Setting tab.'
+        : 'Check that the story so far is in second person, present tense, or turn off Catch slips.'
+    await api.v1.ui.toast(`Story Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. ${advice}`, {
+      type: 'warning',
+    })
   }
 }
 
-export function statusText(d: SlipDecision, reply?: Pick<Reply, 'retryNumber'>): string {
+export function statusText(d: ReplyDecision, reply?: Pick<Reply, 'retryNumber'>): string {
   if (!d.reply.trim()) return 'Last reply: the AI wrote nothing.'
   const total = d.sentences.length
-  if (!d.slip) return `Last reply: no slips (${total} sentence${total === 1 ? '' : 's'}).`
+  if (!d.cut) return `Last reply: nothing to cut (${total} sentence${total === 1 ? '' : 's'}).`
   const kept = d.sentences.filter((s) => s.start < d.keep).length
-  const sentence = quote(d.sentences[d.slip.index].text.trim(), 120)
+  const sentence = quote(d.sentences[d.cut.index].text.trim(), 120)
   const lines = [
     kept === 0
-      ? `Last reply: nothing was kept. It slipped from the first sentence: ${sentence}`
+      ? `Last reply: nothing was kept. It was cut from the first sentence: ${sentence}`
       : `Last reply: kept ${kept} of ${total} sentences. Cut from: ${sentence}`,
-    `Why: it ${d.slip.reason}.`,
+    `Why: it ${d.cut.reason}.`,
   ]
   if (kept === 0 && reply?.retryNumber !== undefined) {
     lines.push(`Asking the AI again automatically (${reply.retryNumber} of ${MAX_AUTO_RETRIES}).`)
@@ -202,9 +238,9 @@ export function statusText(d: SlipDecision, reply?: Pick<Reply, 'retryNumber'>):
   return lines.join('\n')
 }
 
-function detailsText(reply: Reply, d: SlipDecision): string {
+function detailsText(reply: Reply, d: ReplyDecision): string {
   const marks = d.sentences.map((s, i) => {
-    const mark = s.start < d.keep ? '✓' : d.slip?.index === i ? '✂' : '·'
+    const mark = s.start < d.keep ? '✓' : d.cut?.index === i ? '✂' : '·'
     const c = d.checks[i]
     const notes = [
       `past ${c.past}, present ${c.present}`,
@@ -216,7 +252,8 @@ function detailsText(reply: Reply, d: SlipDecision): string {
   })
   return [
     `Story Adventure+ last reply (v${api.v1.script.version})`,
-    `Model: ${reply.model} | name: ${reply.name ? quote(reply.name, 60) : '(none)'}`,
+    `Model: ${reply.model} | slips: ${reply.slips ? 'checked' : 'off'} | name: ${reply.name ? quote(reply.name, 60) : '(none)'}`,
+    `Not in this story: ${reply.absent.length > 0 ? reply.absent.flatMap((a) => a.variants).join(', ') : '(none, or not cut)'}`,
     statusText(d, reply),
     'Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):',
     ...marks,

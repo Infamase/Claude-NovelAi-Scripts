@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish. A Story mode fork, **Story Adventure+**, is built too (v0.2.0); see section 13.
+Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish. A Story mode fork, **Story Adventure+**, is built too (v0.3.0); see section 13.
 
 ---
 
@@ -224,6 +224,7 @@ A second script in this repo for Story mode. It drops the turn guard and keeps t
 | Writing quality | A **writing guide** in the system prompt against common AI habits and stock phrases. Editable in the sidebar, with Reset to default; an unedited guide updates with new versions. |
 | Player character | A **Player** tab: name, pronouns, who you are, appearance, status, skills, notes. |
 | Setting | A **Setting** tab (v0.2.0): world, current location, time period, notes, and a "keep to the world's canon" switch for worlds from books, games and films. Sent first in the game state. |
+| Divergences from canon | (v0.3.0) **Changes from canon**, which override canon, and a **Not in this story** list. Replies are cut before the first sentence naming anyone on the list (a per-story switch), because in a world it knows, the AI writes canon characters in regardless. |
 | Name | **Story Adventure+** (its own script id, imported separately). |
 
 ### How it works
@@ -233,6 +234,7 @@ A second script in this repo for Story mode. It drops the turn guard and keeps t
   - First person ("I", "me", "my") or the protagonist's name as a subject ("Hunter walks") in the narration: a slip right there.
   - Past tense: counted per sentence from verb forms after pronouns ("you stepped", "she said"), "was"/"were"/"had", and common narration verbs. A run counts as a slip only if at least two sentences are past, the past outnumbers the present from there on, and the reply is still in the past at its end. Memories ("You remember…") are exempt, and so is backstory that returns to the present.
   - Dialogue in double or single quotes and *italic* thoughts are never checked.
+- **Not in this story.** Each entry's names (as typed, plus the first name of a two-word name that doesn't start with a title) are matched as whole words, case-sensitively, anywhere in the reply, dialogue included. The reply is cut before the first sentence with a match, whichever comes first of that and a slip. Sentences with a match are never let through early.
 - **Retries.** When nothing of a reply is left, the script calls `editor.generate()` after the generation ends, up to twice in a row. Pressing Send yourself resets the count.
 
 ### Assumptions to confirm in the first playtest

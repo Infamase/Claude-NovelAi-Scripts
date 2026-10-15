@@ -5,9 +5,10 @@ import { INV, initInventory } from '../../src/state/inventory.ts'
 import { initParty } from '../../src/state/party.ts'
 import { PLAYER, initPlayer } from '../../src/state/player.ts'
 import { SETTING, initSetting } from '../../src/state/setting.ts'
+import { parseAbsent } from '../../src/state/absent.ts'
 import { KEYS } from '../../src/story/keys.ts'
 import { DEFAULT_GUIDE, POV_REMINDER, POV_RULE } from '../../src/story/prompt.ts'
-import { registerStoryHooks, releasable } from '../../src/story/storyGuard.ts'
+import { decideReply, registerStoryHooks, releasable } from '../../src/story/storyGuard.ts'
 
 type Mock = ReturnType<typeof installMockApi>
 
@@ -89,7 +90,7 @@ describe('story hooks', () => {
     const reply = ' A twig snaps somewhere behind you. You turn. A fox watches from the ferns, then slips away.'
     assert.equal(await continueStory(mock, reply), reply)
     assert.ok((mock.last.placements?.filter(Boolean).length ?? 0) > 2, 'sentences are let through before the end')
-    assert.equal(status(mock), 'Last reply: no slips (3 sentences).')
+    assert.equal(status(mock), 'Last reply: nothing to cut (3 sentences).')
   })
 
   it('cut a reply where it slips into the past', async () => {
@@ -136,6 +137,51 @@ describe('story hooks', () => {
     await continueStory(mock, bad)
     await mock.runTimers()
     assert.equal(mock.counts.editorGenerate, 3)
+  })
+
+  it('cut a reply before the first mention of someone who is not in the story', async () => {
+    const mock = await setup()
+    mock.story.set(SETTING.field('absent'), 'Naruto Uzumaki')
+    const kept = ' Kakashi looks up from his book.'
+    assert.equal(await continueStory(mock, `${kept} "Where's Naruto?" Sakura asks. Nobody answers.`), kept)
+    assert.equal(
+      status(mock),
+      'Last reply: kept 1 of 4 sentences. Cut from: "\\"Where\'s Naruto?\\""\nWhy: it mentions "Naruto" (Naruto Uzumaki), who is not in this story.',
+    )
+  })
+
+  it('cut mentions even with the tense check off, unless the Setting tab says not to', async () => {
+    const mock = await setup({ pov: false })
+    mock.story.set(SETTING.field('absent'), 'Naruto Uzumaki')
+    assert.equal(await continueStory(mock, ' Kakashi waits. Naruto is late again.'), ' Kakashi waits.')
+    assert.equal(await continueStory(mock, ' Kakashi waited. The bridge was empty.'), ' Kakashi waited. The bridge was empty.', 'no tense check')
+
+    mock.story.set(SETTING.cutAbsent, false)
+    assert.equal(await continueStory(mock, ' Kakashi waits. Naruto is late again.'), ' Kakashi waits. Naruto is late again.')
+    mock.story.set(SETTING.cutAbsent, true)
+    mock.story.set(SETTING.share, false)
+    assert.equal(await continueStory(mock, ' Kakashi waits. Naruto is late again.'), ' Kakashi waits. Naruto is late again.', 'not shared, not cut')
+  })
+
+  it('ask again when the first sentence mentions them, with advice if it keeps happening', async () => {
+    const mock = await setup()
+    mock.story.set(SETTING.field('absent'), 'Naruto Uzumaki')
+    const bad = ' Naruto grins at you.'
+    assert.equal(await continueStory(mock, bad), '')
+    await mock.runTimers()
+    assert.match(mock.toasts[0], /the reply's first sentence mentions "Naruto" \(Naruto Uzumaki\), who is not in this story, so it was dropped\. Asking again \(1 of 2\)/)
+    await continueStory(mock, bad, { scriptInitiated: true })
+    await mock.runTimers()
+    await continueStory(mock, bad, { scriptInitiated: true })
+    assert.match(mock.toasts[2], /steer it elsewhere, or untick "Cut replies that mention them"/)
+  })
+
+  it('hold back a sentence that mentions them while the reply streams, and cut at whichever comes first', () => {
+    const absent = parseAbsent('Naruto Uzumaki')
+    assert.equal(releasable(' Kakashi waits. Naruto is late. Sakura sighs. The', { absent }), ' Kakashi waits.'.length)
+    const reply = ' Kakashi waits. You waited too. Naruto was late. The bridge was empty.'
+    assert.equal(decideReply(reply, { absent }).cut?.reason, 'slips into past tense ("you waited")')
+    assert.equal(decideReply(reply, { absent, slips: false }).cut?.kind, 'absent')
   })
 
   it('show the additions in dry runs, such as the Context viewer', async () => {

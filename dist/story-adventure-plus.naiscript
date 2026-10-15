@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 49fb05e0-8e3c-4f0e-a7f0-eaea528b70c5
 name: Story Adventure+
 createdAt: 1792084608383
-updatedAt: 1792090415163
-version: 0.2.0
+updatedAt: 1792090945785
+version: 0.3.0
 author: Infamase
 description: Keeps Story mode in second person, present tense with a writing guide against AI cliches, and adds Setting, Player, Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -242,47 +242,104 @@ memoryLimit: 8
     return value.split("\n").map((line) => line.trim()).filter((line) => line !== "").map((line) => /[.!?…]$/.test(line) ? line : `${line}.`).join(" ");
   }
 
+  // src/state/absent.ts
+  var TITLES = new Set(
+    "the a an lord lady king queen prince princess sir dame captain general commander admiral doctor dr professor master mister miss mr mrs ms saint st uncle aunt father mother brother sister old young great high grand elder little big".split(" ")
+  );
+  function parseAbsent(list) {
+    return list.split("\n").map((line) => line.split(",").map((part) => part.trim()).filter((part) => part !== "")).filter((parts) => parts.length > 0).map((parts) => {
+      const variants = [...parts];
+      for (const part of parts) {
+        const words = part.split(/\s+/);
+        if (words.length === 2 && /^\p{Lu}/u.test(words[0]) && /^\p{Lu}/u.test(words[1]) && !TITLES.has(words[0].toLowerCase())) {
+          variants.push(words[0]);
+        }
+      }
+      return { name: parts[0], variants: [...new Set(variants)] };
+    });
+  }
+  function findMention(text2, sentences3, absent) {
+    const pairs = absent.flatMap((a) => a.variants.map((variant) => ({ name: a.name, variant })));
+    if (pairs.length === 0 || sentences3.length === 0) return void 0;
+    pairs.sort((a, b) => b.variant.length - a.variant.length);
+    const pattern = new RegExp(
+      `(?:^|[^\\p{L}\\p{N}])(${pairs.map((p) => escapeRegExp(p.variant)).join("|")})(?![\\p{L}\\p{N}])`,
+      "gu"
+    );
+    for (const match of text2.matchAll(pattern)) {
+      const at = (match.index ?? 0) + match[0].length - match[1].length;
+      const index = sentences3.findIndex((s) => at < s.end);
+      if (index < 0) continue;
+      const pair = pairs.find((p) => p.variant === match[1]);
+      return { index, name: pair?.name ?? match[1], variant: match[1] };
+    }
+    return void 0;
+  }
+  function escapeRegExp(text2) {
+    return text2.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   // src/state/setting.ts
   var SETTING = {
     share: "tap.setting.share",
     canon: "tap.setting.canon",
+    cutAbsent: "tap.setting.cutAbsent",
     /** What the AI sees, for the tab's preview. */
     preview: "tap.setting.preview",
     field: (field) => `tap.setting.${field}`
   };
-  var TEXT_FIELDS = ["world", "location", "time", "notes"];
+  var TEXT_FIELDS = ["world", "location", "time", "changes", "absent", "notes"];
   async function initSetting() {
     const s = api.v1.storyStorage;
     await s.setIfAbsent(SETTING.share, true);
     await s.setIfAbsent(SETTING.canon, true);
+    await s.setIfAbsent(SETTING.cutAbsent, true);
     for (const field of TEXT_FIELDS) await s.setIfAbsent(SETTING.field(field), "");
   }
   async function readSetting() {
     const s = api.v1.storyStorage;
+    const field = async (name) => text(await s.get(SETTING.field(name))).trim();
     return {
       share: await s.get(SETTING.share) !== false,
-      world: text(await s.get(SETTING.field("world"))).trim(),
-      location: text(await s.get(SETTING.field("location"))).trim(),
-      time: text(await s.get(SETTING.field("time"))).trim(),
+      world: await field("world"),
+      location: await field("location"),
+      time: await field("time"),
       canon: await s.get(SETTING.canon) !== false,
-      notes: text(await s.get(SETTING.field("notes"))).trim()
+      changes: await field("changes"),
+      absent: await field("absent"),
+      cutAbsent: await s.get(SETTING.cutAbsent) !== false,
+      notes: await field("notes")
     };
+  }
+  function absentList(setting) {
+    return setting.share ? parseAbsent(setting.absent) : [];
   }
   function settingLines(setting) {
     if (!setting.share) return [];
-    const { world, location, time, canon, notes } = setting;
-    if (![world, location, time, notes].some((value) => value !== "")) return [];
+    const { world, location, time, canon, changes, notes } = setting;
+    const absent = absentList(setting);
+    const lines = [];
     const parts = [];
     if (world) parts.push(`Setting: ${sentences2(world)}`);
     if (location) parts.push(`Current location: ${sentences2(location)}`);
     if (time) parts.push(`Time: ${sentences2(time)}`);
     if (world && canon) {
-      parts.push(
-        `Keep to the established canon of this world (its lore, history, technology and characters)${notes ? ", except where the notes say otherwise" : ""}.`
-      );
+      const except = changes || absent.length > 0 ? ", except for the changes listed here, which override it" : notes ? ", except where the notes say otherwise" : "";
+      parts.push(`Keep to the established canon of this world (its lore, history, technology and characters)${except}.`);
     }
     if (notes) parts.push(`Notes: ${sentences2(notes)}`);
-    return [parts.join(" ")];
+    if (parts.length > 0) lines.push(parts.join(" "));
+    if (changes) {
+      lines.push(
+        `Changes from canon: ${sentences2(changes)} Everything that follows from these changes is different too, and the characters know only the world as it is now.`
+      );
+    }
+    if (absent.length > 0) {
+      lines.push(
+        `Not in this story: ${absent.map((a) => a.name).join("; ")}. Leave ${absent.length === 1 ? "them" : "all of them"} out entirely: they never appear, speak or act, and no one mentions them.`
+      );
+    }
+    return lines;
   }
   function sentences2(value) {
     return value.split("\n").map((line) => line.trim()).filter((line) => line !== "").map((line) => /[.!?…]$/.test(line) ? line : `${line}.`).join(" ");
@@ -745,13 +802,43 @@ memoryLimit: 8
         },
         {
           type: "text",
-          text: "For a world from a book, game, film or show: the AI keeps to its lore, history, technology and characters, except where your notes say otherwise.",
+          text: "For a world from a book, game, film or show: the AI keeps to its lore, history, technology and characters, except for the changes below.",
+          style: MUTED
+        },
+        {
+          type: "multilineTextInput",
+          label: "Changes from canon",
+          placeholder: "Naruto Uzumaki died as a baby in the Nine-Tails attack. Team 7 is Sasuke, Sakura and Sai, under Kakashi.",
+          storageKey: key("changes"),
+          onChange: edited
+        },
+        {
+          type: "text",
+          text: "Say what happened instead, not only what didn't: the AI fills any gap with canon. If a character is missing, say who took their place.",
+          style: MUTED
+        },
+        {
+          type: "multilineTextInput",
+          label: "Not in this story",
+          placeholder: "One per line, with other names after commas:\nNaruto Uzumaki, Naruto, the Nine-Tails jinchuriki",
+          storageKey: key("absent"),
+          onChange: edited
+        },
+        {
+          type: "checkboxInput",
+          label: "Cut replies that mention them",
+          storageKey: `story:${SETTING.cutAbsent}`,
+          onChange: edited
+        },
+        {
+          type: "text",
+          text: "A reply is cut before the first sentence that names anyone on the list, even in dialogue, and the AI is asked again if nothing is left. Names match as typed, and a first-and-last name also counts by the first name alone.",
           style: MUTED
         },
         {
           type: "multilineTextInput",
           label: "Notes",
-          placeholder: "Tone, rules of the world, what has happened so far, and anything that differs from canon",
+          placeholder: "Tone, rules of the world, what has happened so far",
           storageKey: key("notes"),
           onChange: edited
         },
@@ -762,7 +849,10 @@ memoryLimit: 8
   async function updateSettingPreview(setting) {
     const current = setting ?? await readSetting();
     const block = gameStateBlock(settingLines(current));
-    const text2 = !current.share ? "Nothing: sending the setting is turned off above." : block ?? "Nothing yet. Fill in the world, location or time, and it will be sent with every reply.";
+    const watched = current.cutAbsent ? absentList(current).flatMap((a) => a.variants) : [];
+    const text2 = !current.share ? "Nothing: sending the setting is turned off above." : block ? watched.length > 0 ? `${block}
+
+Replies are cut at any mention of: ${watched.join(", ")}.` : block : "Nothing yet. Fill in the world, location or time, and it will be sent with every reply.";
     await api.v1.storyStorage.set(SETTING.preview, forTemplate(text2));
   }
 
@@ -1219,7 +1309,16 @@ ${second}` : second;
     api.v1.hooks.register("onGenerationRequested", async ({ continuityId, model, inlineGeneration, toolboxMode, scriptInitiated }) => {
       if (inlineGeneration || toolboxMode || !await isEnabled()) return;
       if (!scriptInitiated) retriesInARow = 0;
-      replies.set(continuityId, { model, ...await readSettings(), name: (await readPlayer()).name, released: "" });
+      const settings = await readSettings();
+      const setting = await readSetting();
+      replies.set(continuityId, {
+        model,
+        ...settings,
+        slips: settings.pov && settings.check,
+        name: (await readPlayer()).name,
+        absent: setting.cutAbsent ? absentList(setting) : [],
+        released: ""
+      });
     });
     api.v1.hooks.register("onBeforeContextBuild", async ({ continuityId, model, dryRun }) => {
       const settings = await settingsFor(continuityId, dryRun);
@@ -1241,14 +1340,14 @@ ${second}` : second;
     });
     api.v1.hooks.register("onResponse", async ({ continuityId, text: text2, final }) => {
       const reply = replies.get(continuityId);
-      if (!reply || !reply.pov || !reply.check) return;
+      if (!reply || !reply.slips && reply.absent.length === 0) return;
       const full = reply.released + text2.join("");
       if (!final) {
-        const count2 = chunksWithin(text2, releasable(full, reply.name) - reply.released.length);
+        const count2 = chunksWithin(text2, releasable(full, reply) - reply.released.length);
         reply.released += text2.slice(0, count2).join("");
         return { seenData: count2 };
       }
-      const decision = decideSlips(full, reply.name);
+      const decision = decideReply(full, reply);
       const keep = decision.keep = Math.max(decision.keep, reply.released.length);
       if (keptNothing(decision)) {
         if (retriesInARow < MAX_AUTO_RETRIES) reply.retryNumber = retriesInARow + 1;
@@ -1275,20 +1374,30 @@ ${second}` : second;
       ...inventoryLines(await readInventory())
     ]);
   }
-  function decideSlips(reply, name = "") {
+  var ALL_CHECKS = { slips: true, name: "", absent: [] };
+  function decideReply(reply, options = {}) {
+    const { slips, name, absent } = { ...ALL_CHECKS, ...options };
     const sentences3 = splitSentences(reply);
     const checks = checkSentences(reply, sentences3, name);
-    const slip = findSlip(checks);
-    let keep = slip ? sentences3[slip.index].start : reply.length;
-    if (slip) while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
-    return { reply, sentences: sentences3, checks, slip, keep };
+    const slip = slips ? findSlip(checks) : void 0;
+    const mention = findMention(reply, sentences3, absent);
+    let cut = slip && { ...slip, kind: "slip" };
+    if (mention && (!cut || mention.index <= cut.index)) {
+      const who = mention.variant === mention.name ? `"${mention.name}"` : `"${mention.variant}" (${mention.name})`;
+      cut = { index: mention.index, reason: `mentions ${who}, who is not in this story`, kind: "absent" };
+    }
+    let keep = cut ? sentences3[cut.index].start : reply.length;
+    if (cut) while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
+    return { reply, sentences: sentences3, checks, cut, keep };
   }
-  function releasable(reply, name = "") {
+  function releasable(reply, options = {}) {
+    const { slips, name, absent } = { ...ALL_CHECKS, ...options };
     const sentences3 = splitSentences(reply);
     if (sentences3.length === 0) return 0;
     const checks = checkSentences(reply, sentences3, name);
+    const mention = findMention(reply, sentences3, absent)?.index ?? sentences3.length;
     let index = 0;
-    while (index < sentences3.length - 1 && !mightSlip(checks[index])) index++;
+    while (index < sentences3.length - 1 && index < mention && !(slips && mightSlip(checks[index]))) index++;
     return sentences3[index].start;
   }
   function chunksWithin(chunks, length) {
@@ -1309,25 +1418,25 @@ ${second}` : second;
     if (!keptNothing(decision)) return;
     if (reply.retryNumber !== void 0) {
       await api.v1.ui.toast(
-        `Story Adventure+: the reply slipped out of second person, present tense from its first sentence, so it was dropped. Asking again (${reply.retryNumber} of ${MAX_AUTO_RETRIES})…`,
+        `Story Adventure+: the reply's first sentence ${decision.cut?.reason}, so it was dropped. Asking again (${reply.retryNumber} of ${MAX_AUTO_RETRIES})…`,
         { type: "info" }
       );
     } else {
-      await api.v1.ui.toast(
-        `Story Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. Check that the story so far is in second person, present tense, or turn off Catch slips.`,
-        { type: "warning" }
-      );
+      const advice = decision.cut?.kind === "absent" ? 'The story may be leading the AI to them: steer it elsewhere, or untick "Cut replies that mention them" in the Setting tab.' : "Check that the story so far is in second person, present tense, or turn off Catch slips.";
+      await api.v1.ui.toast(`Story Adventure+: still no usable reply after ${MAX_AUTO_RETRIES + 1} tries. ${advice}`, {
+        type: "warning"
+      });
     }
   }
   function statusText(d, reply) {
     if (!d.reply.trim()) return "Last reply: the AI wrote nothing.";
     const total = d.sentences.length;
-    if (!d.slip) return `Last reply: no slips (${total} sentence${total === 1 ? "" : "s"}).`;
+    if (!d.cut) return `Last reply: nothing to cut (${total} sentence${total === 1 ? "" : "s"}).`;
     const kept = d.sentences.filter((s) => s.start < d.keep).length;
-    const sentence2 = quote(d.sentences[d.slip.index].text.trim(), 120);
+    const sentence2 = quote(d.sentences[d.cut.index].text.trim(), 120);
     const lines = [
-      kept === 0 ? `Last reply: nothing was kept. It slipped from the first sentence: ${sentence2}` : `Last reply: kept ${kept} of ${total} sentences. Cut from: ${sentence2}`,
-      `Why: it ${d.slip.reason}.`
+      kept === 0 ? `Last reply: nothing was kept. It was cut from the first sentence: ${sentence2}` : `Last reply: kept ${kept} of ${total} sentences. Cut from: ${sentence2}`,
+      `Why: it ${d.cut.reason}.`
     ];
     if (kept === 0 && reply?.retryNumber !== void 0) {
       lines.push(`Asking the AI again automatically (${reply.retryNumber} of ${MAX_AUTO_RETRIES}).`);
@@ -1336,7 +1445,7 @@ ${second}` : second;
   }
   function detailsText(reply, d) {
     const marks = d.sentences.map((s, i) => {
-      const mark = s.start < d.keep ? "✓" : d.slip?.index === i ? "✂" : "·";
+      const mark = s.start < d.keep ? "✓" : d.cut?.index === i ? "✂" : "·";
       const c = d.checks[i];
       const notes = [
         `past ${c.past}, present ${c.present}`,
@@ -1348,7 +1457,8 @@ ${second}` : second;
     });
     return [
       `Story Adventure+ last reply (v${api.v1.script.version})`,
-      `Model: ${reply.model} | name: ${reply.name ? quote(reply.name, 60) : "(none)"}`,
+      `Model: ${reply.model} | slips: ${reply.slips ? "checked" : "off"} | name: ${reply.name ? quote(reply.name, 60) : "(none)"}`,
+      `Not in this story: ${reply.absent.length > 0 ? reply.absent.flatMap((a) => a.variants).join(", ") : "(none, or not cut)"}`,
       statusText(d, reply),
       "Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):",
       ...marks
