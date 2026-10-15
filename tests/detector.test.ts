@@ -61,6 +61,15 @@ describe('findOverstep', () => {
     }
   })
 
+  it('cuts a scene break, heading or chapter title', () => {
+    // From the third playtest: the reply moved on to a new "chapter" after the dragon's line.
+    assert.deepEqual(cutAt('The dragon waits.\n***\n[ Dragonfire and Doubts ]\nYou blink at her.'), {
+      sentence: '***',
+      reason: 'starts a new scene or chapter',
+    })
+    assert.equal(cutAt('The dragon waits.\n\n[ Chapter 2 ]')?.reason, 'starts a new scene or chapter')
+  })
+
   it('cuts a new action marker', () => {
     assert.equal(cutAt('The ale is warm.\n> You draw your sword.')?.reason, 'starts a new player action (>)')
   })

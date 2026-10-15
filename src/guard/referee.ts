@@ -19,6 +19,8 @@ export type RefereeResult = {
   ms: number
   /** The model that answered. */
   model?: string
+  /** Attempts that failed before the one that answered. */
+  failedFirst?: string
   error?: string
 }
 
@@ -128,9 +130,10 @@ export async function askReferee(storyModel: string, input: RefereeInput): Promi
       working = attempt
       const raw = outcome.text ?? ''
       const answer = parseRefereeAnswer(raw, input.sentences.length)
+      const failedFirst = errors.length ? errors.join('; ') : undefined
       return answer === undefined
-        ? { raw, ms: elapsed(), model: attempt.model, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` }
-        : { answer, raw, ms: elapsed(), model: attempt.model }
+        ? { raw, ms: elapsed(), model: attempt.model, failedFirst, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` }
+        : { answer, raw, ms: elapsed(), model: attempt.model, failedFirst }
     }
     return { raw: '', ms: elapsed(), error: errors.join('; ') }
   } finally {

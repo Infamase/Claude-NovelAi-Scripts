@@ -4,7 +4,7 @@
 // but the narrator may not. Who is speaking an unattributed quote, or whose thought an unmarked line
 // is, can't be told from patterns; the referee handles those.
 
-import { quoteMask, type Sentence } from './text.ts'
+import { isSceneMarker, quoteMask, type Sentence } from './text.ts'
 
 export type Overstep = { index: number; reason: string }
 
@@ -84,6 +84,7 @@ export function findOverstep(text: string, sentences: Sentence[], options: Detec
 
 function checkSentence(raw: string, narration: string, typed: Set<string>, options: DetectOptions): string | undefined {
   if (raw.startsWith('>')) return 'starts a new player action (>)'
+  if (isSceneMarker(raw)) return 'starts a new scene or chapter'
   if (narration === '') return undefined
   for (const [pattern, reason] of PROMPTS) if (pattern.test(narration)) return reason
   if (SPEECH.test(narration)) return 'your character speaks'

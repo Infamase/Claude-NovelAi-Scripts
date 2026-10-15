@@ -42,6 +42,7 @@ describe('narratorRules', () => {
     assert.match(rules, /Never continue a conversation on their behalf/)
     assert.match(rules, /never on a question to the player: do not ask what they do/)
     assert.match(rules, /Keep it short/)
+    assert.match(rules, /Stay in this scene: no scene breaks, headings or chapter titles/)
     assert.match(rules, /Involuntary physical reactions, like a flinch or a racing heart, are fine/)
     assert.match(narratorRules(true), /not even physical reactions/)
     assert.doesNotMatch(rules, /\[|\]/)

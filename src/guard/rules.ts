@@ -17,8 +17,9 @@ export function narratorRules(strict: boolean): string {
       ? '2. Never write anything the player character says, thinks, feels, decides or does beyond what the player wrote, not even physical reactions.'
       : '2. Never write the player character\'s speech, thoughts, decisions or deliberate actions beyond what the player wrote. Involuntary physical reactions, like a flinch or a racing heart, are fine.',
     '3. Stop at the first moment the player character could speak, act or decide. Never continue a conversation on their behalf.',
-    '4. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.',
-    '5. Keep it short: one to three short paragraphs.',
+    '4. Stay in this scene: no scene breaks, headings or chapter titles, and no skipping ahead in time.',
+    '5. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.',
+    '6. Keep it short: one to three short paragraphs.',
   ].join('\n')
 }
 

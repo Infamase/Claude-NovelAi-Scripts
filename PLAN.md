@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 1 (v0.2.2)**: the turn guard, tuning from playtests.
+Status: **Phase 1 (v0.2.3)**: the turn guard, tuning from playtests.
 
 ---
 
@@ -64,6 +64,7 @@ The script holds every streamed chunk back (`seenData: 0`) and decides on the fi
 | Your character speaking | `"…," you say`, `You ask her name.` | rules |
 | Your character's thoughts or decisions | `You wonder if…`, `You realize…`, `You decide to…` | rules |
 | End-of-turn prompts, in any form | `What do you do?`, `The choice is yours.`, `Will you fight or flee?` | rules |
+| Scene breaks, headings, chapter titles | `***`, `- - -`, `[ Dragonfire and Doubts ]`, `Chapter 2` | rules: removed at the start of a reply, cut anywhere after |
 | Unattributed speech, unmarked thoughts | `"First... guest?"`, `Her? The dragon is... a woman?` | referee |
 | Deliberate actions you didn't type | `You nod and slide your mug over.` | referee (the rules, when it's off or unavailable) |
 | Physical reactions | `You cough.`, `You flinch.` | allowed; cut in strict mode |
@@ -183,6 +184,7 @@ dist/text-adventure-plus.naiscript   ← the file you import
 - **First playtest (v0.2.0):** the AI ignored the bracketed rules and wrote a whole conversation for the player character, copying the intro's style. The referee's AI call failed with an error the script showed as `[object Object]`. With Strict on, the first sentence ("You swallow hard…") was a reaction, so nothing was kept.
 - **v0.2.1 response:** plain numbered rules after the input marked as the player's action, plus a system-prompt line; readable referee errors; the referee tries the story's model, then GLM 4.6 (the API notes say script generation officially supports only GLM 4.6); a **Test the referee** button; automatic re-asking when nothing can be kept; swallowing, gulping, tensing and similar count as reactions.
 - **Second playtest (v0.2.1), with the rewritten intro:** the referee works inside a reply (Xialong, 0.5 s). The AI kept to the dragon's side and wrote no lines for the player. The referee flagged an allowed reaction ("Your mouth goes dry.") with Strict off, so v0.2.2 spells out allowed sensations and reactions with examples and asks it to flag only clear breaks.
+- **Third playtest (v0.2.2):** a good reply up to "The dragon waits.", but it began with a stray `***`, and after that line the AI started a new "chapter" (`***`, `[ Dragonfire and Doubts ]`) before writing for the player. Both markers were kept because the cut came after them. v0.2.3 removes scene breaks and headings at the start of a reply, cuts at any later one, and adds a "stay in this scene" rule. The referee also fell back to GLM 4.6 once; details now show which attempt failed first.
 
 ## 11. Risks
 

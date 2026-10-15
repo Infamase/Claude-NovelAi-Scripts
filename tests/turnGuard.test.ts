@@ -108,6 +108,36 @@ describe('turn guard', () => {
     assert.equal(mock.counts.editorGenerate, 3)
   })
 
+  it('drops a scene break at the start and cuts at one later on', async () => {
+    // The reply from the third playtest, with its paragraph breaks.
+    const reply = [
+      '***',
+      '"Speak with? Yes, with," she says, tilting her head, studying you with unnerving intensity. Her voice reverberates in your skull like a drumbeat.',
+      'The air around you feels heavy, pressing you back. Your mouth opens, but no words come out.',
+      '"Tell me your name, or we\'ll see if you\'re more talkative as a smear on the wall."',
+      'The cave is silent, except for your pulse pounding in your ears. The dragon waits.',
+      '***',
+      '[ Dragonfire and Doubts ]',
+      'You blink at her. Then, "That\'s not my name."',
+    ].join('\n')
+    const mock = await setup()
+    const kept = await turn(mock, 'You ask "Speak with?"', reply)
+    assert.ok(kept.startsWith('"Speak with? Yes, with," she says'), kept)
+    assert.ok(kept.endsWith('The dragon waits.'), kept)
+    assert.match(status(mock), /Why: starts a new scene or chapter \(found by the pattern rules\)\.\nRemoved a scene break or heading from the start\./)
+    // The referee only judges the reply proper: no leading marker, nothing from the cut on.
+    assert.match(refereePromptOf(mock), /\n1\. "Speak with\?\n/)
+    assert.doesNotMatch(refereePromptOf(mock), /Dragonfire|\d\. \*\*\*/)
+    assert.match(String(mock.story.get(KEYS.lastTurnDetails)), /\n {2}1 – "\*\*\*"\n/)
+  })
+
+  it('keeps nothing from a reply that is only scene breaks and headings', async () => {
+    const mock = await setup()
+    assert.equal(await turn(mock, 'You wait.', '***\n[ Chapter 2 ]'), '')
+    assert.match(status(mock), /nothing was kept\. The reply was only scene breaks or headings/)
+    assert.equal(mock.refereeCalls.length, 0)
+  })
+
   it('falls back to GLM 4.6 for the referee when the story model fails', async () => {
     const mock = await setup({
       referee: (_messages, params) => {

@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792072280933
-version: 0.2.2
+updatedAt: 1792074600145
+version: 0.2.3
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -118,13 +118,18 @@ memoryLimit: 8
     }
     return mask;
   }
-  function truncateChunks(chunks, length) {
-    let remaining = length;
+  function sliceChunks(chunks, from, to) {
+    let offset = 0;
     return chunks.map((chunk) => {
-      const kept = chunk.slice(0, Math.max(0, remaining));
-      remaining -= chunk.length;
-      return kept;
+      const start = Math.max(0, from - offset);
+      const end = Math.min(chunk.length, to - offset);
+      offset += chunk.length;
+      return start < end ? chunk.slice(start, end) : "";
     });
+  }
+  function isSceneMarker(sentence) {
+    const line = sentence.trim();
+    return /^(?:⁂|(?:[*\-_~=#•]\s*){3,})$/.test(line) || /^\[[^\]\n]{1,100}\]$/.test(line) || /^(?:chapter|part|book|act)\s+(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b[^.!?\n]{0,80}$/i.test(line);
   }
   function isSpace(ch) {
     return ch === " " || ch === "\n" || ch === "	" || ch === "\r";
@@ -188,6 +193,7 @@ memoryLimit: 8
   }
   function checkSentence(raw, narration, typed, options) {
     if (raw.startsWith(">")) return "starts a new player action (>)";
+    if (isSceneMarker(raw)) return "starts a new scene or chapter";
     if (narration === "") return void 0;
     for (const [pattern, reason] of PROMPTS) if (pattern.test(narration)) return reason;
     if (SPEECH.test(narration)) return "your character speaks";
@@ -306,7 +312,8 @@ memoryLimit: 8
         working = attempt;
         const raw = outcome.text ?? "";
         const answer = parseRefereeAnswer(raw, input.sentences.length);
-        return answer === void 0 ? { raw, ms: elapsed(), model: attempt.model, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer, raw, ms: elapsed(), model: attempt.model };
+        const failedFirst = errors.length ? errors.join("; ") : void 0;
+        return answer === void 0 ? { raw, ms: elapsed(), model: attempt.model, failedFirst, error: `unreadable answer ${JSON.stringify(raw.slice(0, 40))}` } : { answer, raw, ms: elapsed(), model: attempt.model, failedFirst };
       }
       return { raw: "", ms: elapsed(), error: errors.join("; ") };
     } finally {
@@ -359,8 +366,9 @@ memoryLimit: 8
       "1. Write only the world's response: what the other characters and any companions say and do, and what the player character sees and hears.",
       strict ? "2. Never write anything the player character says, thinks, feels, decides or does beyond what the player wrote, not even physical reactions." : "2. Never write the player character's speech, thoughts, decisions or deliberate actions beyond what the player wrote. Involuntary physical reactions, like a flinch or a racing heart, are fine.",
       "3. Stop at the first moment the player character could speak, act or decide. Never continue a conversation on their behalf.",
-      "4. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.",
-      "5. Keep it short: one to three short paragraphs."
+      "4. Stay in this scene: no scene breaks, headings or chapter titles, and no skipping ahead in time.",
+      "5. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.",
+      "6. Keep it short: one to three short paragraphs."
     ].join("\n");
   }
   function addedText(strict) {
@@ -456,8 +464,8 @@ ${second}` : second;
         retriesInARow = 0;
       }
       report(turn, decision).catch(logError);
-      if (decision.keep === decision.reply.length) return;
-      return { text: truncateChunks(text, decision.keep) };
+      if (decision.keepFrom === 0 && decision.keep === decision.reply.length) return;
+      return { text: sliceChunks(text, decision.keepFrom, decision.keep) };
     });
     api.v1.hooks.register("onGenerationEnd", ({ continuityId }) => {
       const turn = turns.get(continuityId);
@@ -469,37 +477,42 @@ ${second}` : second;
   }
   async function decide(turn, reply) {
     const sentences = splitSentences(reply);
+    let lead = 0;
+    while (lead < sentences.length && isSceneMarker(sentences[lead].text)) lead++;
+    const body = sentences.slice(lead);
     const options = { strict: turn.strict, playerInput: turn.playerInput };
-    const byRules = (overstep) => overstep ? { ...overstep, by: "rules" } : void 0;
-    let cut = byRules(findOverstep(reply, sentences, { ...options, actions: !turn.referee }));
+    const byRules = (overstep) => overstep ? { ...overstep, index: overstep.index + lead, by: "rules" } : void 0;
+    let cut = byRules(findOverstep(reply, body, { ...options, actions: !turn.referee }));
     let referee;
     const checkUpTo = cut ? cut.index : sentences.length;
-    if (turn.referee && checkUpTo > 0) {
+    if (turn.referee && checkUpTo > lead) {
       referee = await askReferee(turn.model, {
         storyTail: turn.storyTail,
         playerInput: turn.playerInput,
-        sentences: sentences.slice(0, checkUpTo).map((s) => s.text),
+        sentences: sentences.slice(lead, checkUpTo).map((s) => s.text),
         strict: turn.strict
       });
       if (referee.answer) {
-        cut = { index: referee.answer - 1, reason: "writes for your character", by: "referee" };
+        cut = { index: lead + referee.answer - 1, reason: "writes for your character", by: "referee" };
       } else if (referee.error) {
-        const fallback = byRules(findOverstep(reply, sentences, { ...options, actions: true }));
+        const fallback = byRules(findOverstep(reply, body, { ...options, actions: true }));
         if (fallback && (!cut || fallback.index < cut.index)) cut = fallback;
       }
     }
+    let keepFrom = lead > 0 ? sentences[lead]?.start ?? reply.length : 0;
+    while (lead > 0 && keepFrom < reply.length && /\s/.test(reply[keepFrom])) keepFrom++;
     let keep = cut ? sentences[cut.index].start : reply.length;
     let unfinishedTrimmed = false;
     const last = sentences[sentences.length - 1];
-    if (!cut && sentences.length > 1 && !isComplete(last.text)) {
+    if (!cut && body.length > 1 && !isComplete(last.text)) {
       keep = last.start;
       unfinishedTrimmed = true;
     }
-    while (keep > 0 && /\s/.test(reply[keep - 1])) keep--;
-    return { reply, sentences, keep, cut, unfinishedTrimmed, referee };
+    while (keep > keepFrom && /\s/.test(reply[keep - 1])) keep--;
+    return { reply, sentences, lead, keepFrom, keep: Math.max(keep, keepFrom), cut, unfinishedTrimmed, referee };
   }
   function keptNothing(decision) {
-    return decision.keep === 0 && decision.reply.trim() !== "";
+    return decision.reply.trim() !== "" && decision.reply.slice(decision.keepFrom, decision.keep).trim() === "";
   }
   async function report(turn, decision) {
     await api.v1.storyStorage.set(KEYS.lastTurnStatus, sanitize(statusText(decision, turn)));
@@ -519,8 +532,8 @@ ${second}` : second;
   }
   function statusText(d, turn) {
     if (!d.reply.trim()) return "Last turn: the AI wrote nothing.";
-    const total = d.sentences.length;
-    const kept = d.sentences.filter((s) => s.start < d.keep).length;
+    const total = d.sentences.length - d.lead;
+    const kept = d.sentences.filter((s, i) => i >= d.lead && s.start < d.keep).length;
     const lines = [];
     if (d.cut) {
       const sentence = quote(d.sentences[d.cut.index].text.trim(), 120);
@@ -531,11 +544,14 @@ ${second}` : second;
       if (kept === 0 && turn?.retryNumber !== void 0) {
         lines.push(`Asking the AI again automatically (${turn.retryNumber} of ${MAX_AUTO_RETRIES}).`);
       }
+    } else if (total === 0) {
+      lines.push("Last turn: nothing was kept. The reply was only scene breaks or headings.");
     } else if (d.unfinishedTrimmed) {
       lines.push(`Last turn: kept ${kept} of ${total} sentences, minus an unfinished last sentence.`);
     } else {
       lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? "" : "s"}).`);
     }
+    if (d.lead > 0 && total > 0) lines.push("Removed a scene break or heading from the start.");
     if (d.referee) {
       const seconds = `${(d.referee.ms / 1e3).toFixed(1)} s`;
       lines.push(
@@ -546,7 +562,7 @@ ${second}` : second;
   }
   function detailsText(turn, d) {
     const marks = d.sentences.map((s, i) => {
-      const mark = s.start < d.keep ? "✓" : d.cut?.index === i ? "✂" : "·";
+      const mark = i < d.lead ? "–" : s.start < d.keep ? "✓" : d.cut?.index === i ? "✂" : "·";
       return `  ${i + 1} ${mark} ${quote(s.text.trim(), 400)}`;
     });
     return [
@@ -554,8 +570,8 @@ ${second}` : second;
       `Model: ${turn.model} | strict: ${turn.strict ? "on" : "off"} | referee: ${turn.referee ? "on" : "off"}`,
       `Player input: ${turn.playerInput === void 0 ? "(none)" : quote(turn.playerInput, 400)}`,
       statusText(d, turn),
-      d.referee ? `Referee answer: ${quote(d.referee.raw, 40)}` : "Referee: not asked",
-      "Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):",
+      d.referee ? `Referee answer: ${quote(d.referee.raw, 40)}${d.referee.failedFirst ? ` (after ${d.referee.failedFirst})` : ""}` : "Referee: not asked",
+      "Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden, – removed):",
       ...marks,
       `Story just before: ${quote(turn.storyTail ?? "", 400)}`
     ].join("\n");

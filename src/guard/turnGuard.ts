@@ -10,7 +10,7 @@ import { KEYS, logError } from '../keys.ts'
 import { findOverstep, type Overstep } from './detector.ts'
 import { askReferee, isRefereeRunning, type RefereeInput, type RefereeResult } from './referee.ts'
 import { addedText, turnContext, withRules } from './rules.ts'
-import { isComplete, splitSentences, truncateChunks, type Sentence } from './text.ts'
+import { isComplete, isSceneMarker, sliceChunks, splitSentences, type Sentence } from './text.ts'
 
 /** How many times in a row the guard asks again when nothing of a reply could be kept. */
 const MAX_AUTO_RETRIES = 2
@@ -28,7 +28,10 @@ export type Turn = Settings & {
 export type Decision = {
   reply: string
   sentences: Sentence[]
-  /** How many characters of the reply reach the editor. */
+  /** How many scene breaks or headings were dropped from the start of the reply. */
+  lead: number
+  /** The part of the reply that reaches the editor: characters keepFrom to keep. */
+  keepFrom: number
   keep: number
   cut?: Overstep & { by: 'rules' | 'referee' }
   unfinishedTrimmed: boolean
@@ -78,8 +81,8 @@ export function registerTurnGuard(): void {
       retriesInARow = 0
     }
     report(turn, decision).catch(logError)
-    if (decision.keep === decision.reply.length) return
-    return { text: truncateChunks(text, decision.keep) }
+    if (decision.keepFrom === 0 && decision.keep === decision.reply.length) return
+    return { text: sliceChunks(text, decision.keepFrom, decision.keep) }
   })
 
   api.v1.hooks.register('onGenerationEnd', ({ continuityId }) => {
@@ -95,43 +98,51 @@ export function registerTurnGuard(): void {
 /** Decides how much of a finished reply to keep. */
 export async function decide(turn: Turn, reply: string): Promise<Decision> {
   const sentences = splitSentences(reply)
+  // Scene breaks and headings at the very start are dropped; the reply proper begins after them.
+  // Anywhere later they mean the AI is moving on to a new scene, so the rules cut there.
+  let lead = 0
+  while (lead < sentences.length && isSceneMarker(sentences[lead].text)) lead++
+  const body = sentences.slice(lead)
   const options = { strict: turn.strict, playerInput: turn.playerInput }
-  const byRules = (overstep: Overstep | undefined) => (overstep ? { ...overstep, by: 'rules' as const } : undefined)
+  const byRules = (overstep: Overstep | undefined) =>
+    overstep ? { ...overstep, index: overstep.index + lead, by: 'rules' as const } : undefined
 
   // With the referee on, it judges actions; the rules still catch the clear-cut cases.
-  let cut: Decision['cut'] = byRules(findOverstep(reply, sentences, { ...options, actions: !turn.referee }))
+  let cut: Decision['cut'] = byRules(findOverstep(reply, body, { ...options, actions: !turn.referee }))
   let referee: RefereeResult | undefined
   const checkUpTo = cut ? cut.index : sentences.length
-  if (turn.referee && checkUpTo > 0) {
+  if (turn.referee && checkUpTo > lead) {
     referee = await askReferee(turn.model, {
       storyTail: turn.storyTail,
       playerInput: turn.playerInput,
-      sentences: sentences.slice(0, checkUpTo).map((s) => s.text),
+      sentences: sentences.slice(lead, checkUpTo).map((s) => s.text),
       strict: turn.strict,
     })
     if (referee.answer) {
-      cut = { index: referee.answer - 1, reason: 'writes for your character', by: 'referee' }
+      cut = { index: lead + referee.answer - 1, reason: 'writes for your character', by: 'referee' }
     } else if (referee.error) {
       // Without the referee's verdict, let the rules judge actions too.
-      const fallback = byRules(findOverstep(reply, sentences, { ...options, actions: true }))
+      const fallback = byRules(findOverstep(reply, body, { ...options, actions: true }))
       if (fallback && (!cut || fallback.index < cut.index)) cut = fallback
     }
   }
 
+  let keepFrom = lead > 0 ? (sentences[lead]?.start ?? reply.length) : 0
+  while (lead > 0 && keepFrom < reply.length && /\s/.test(reply[keepFrom])) keepFrom++
   let keep = cut ? sentences[cut.index].start : reply.length
   let unfinishedTrimmed = false
   const last = sentences[sentences.length - 1]
-  if (!cut && sentences.length > 1 && !isComplete(last.text)) {
+  if (!cut && body.length > 1 && !isComplete(last.text)) {
     // The length limit cut the reply off mid-sentence.
     keep = last.start
     unfinishedTrimmed = true
   }
-  while (keep > 0 && /\s/.test(reply[keep - 1])) keep--
-  return { reply, sentences, keep, cut, unfinishedTrimmed, referee }
+  while (keep > keepFrom && /\s/.test(reply[keep - 1])) keep--
+  return { reply, sentences, lead, keepFrom, keep: Math.max(keep, keepFrom), cut, unfinishedTrimmed, referee }
 }
 
 function keptNothing(decision: Decision): boolean {
-  return decision.keep === 0 && decision.reply.trim() !== ''
+  return decision.reply.trim() !== '' && decision.reply.slice(decision.keepFrom, decision.keep).trim() === ''
 }
 
 async function report(turn: Turn, decision: Decision): Promise<void> {
@@ -153,8 +164,8 @@ async function report(turn: Turn, decision: Decision): Promise<void> {
 
 export function statusText(d: Decision, turn?: Pick<Turn, 'retryNumber'>): string {
   if (!d.reply.trim()) return 'Last turn: the AI wrote nothing.'
-  const total = d.sentences.length
-  const kept = d.sentences.filter((s) => s.start < d.keep).length
+  const total = d.sentences.length - d.lead
+  const kept = d.sentences.filter((s, i) => i >= d.lead && s.start < d.keep).length
   const lines: string[] = []
   if (d.cut) {
     const sentence = quote(d.sentences[d.cut.index].text.trim(), 120)
@@ -167,11 +178,14 @@ export function statusText(d: Decision, turn?: Pick<Turn, 'retryNumber'>): strin
     if (kept === 0 && turn?.retryNumber !== undefined) {
       lines.push(`Asking the AI again automatically (${turn.retryNumber} of ${MAX_AUTO_RETRIES}).`)
     }
+  } else if (total === 0) {
+    lines.push('Last turn: nothing was kept. The reply was only scene breaks or headings.')
   } else if (d.unfinishedTrimmed) {
     lines.push(`Last turn: kept ${kept} of ${total} sentences, minus an unfinished last sentence.`)
   } else {
     lines.push(`Last turn: nothing to cut (${total} sentence${total === 1 ? '' : 's'}).`)
   }
+  if (d.lead > 0 && total > 0) lines.push('Removed a scene break or heading from the start.')
   if (d.referee) {
     const seconds = `${(d.referee.ms / 1000).toFixed(1)} s`
     lines.push(
@@ -185,7 +199,7 @@ export function statusText(d: Decision, turn?: Pick<Turn, 'retryNumber'>): strin
 
 function detailsText(turn: Turn, d: Decision): string {
   const marks = d.sentences.map((s, i) => {
-    const mark = s.start < d.keep ? '✓' : d.cut?.index === i ? '✂' : '·'
+    const mark = i < d.lead ? '–' : s.start < d.keep ? '✓' : d.cut?.index === i ? '✂' : '·'
     return `  ${i + 1} ${mark} ${quote(s.text.trim(), 400)}`
   })
   return [
@@ -193,8 +207,10 @@ function detailsText(turn: Turn, d: Decision): string {
     `Model: ${turn.model} | strict: ${turn.strict ? 'on' : 'off'} | referee: ${turn.referee ? 'on' : 'off'}`,
     `Player input: ${turn.playerInput === undefined ? '(none)' : quote(turn.playerInput, 400)}`,
     statusText(d, turn),
-    d.referee ? `Referee answer: ${quote(d.referee.raw, 40)}` : 'Referee: not asked',
-    'Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden):',
+    d.referee
+      ? `Referee answer: ${quote(d.referee.raw, 40)}${d.referee.failedFirst ? ` (after ${d.referee.failedFirst})` : ''}`
+      : 'Referee: not asked',
+    'Reply, sentence by sentence (✓ kept, ✂ cut here, · hidden, – removed):',
     ...marks,
     `Story just before: ${quote(turn.storyTail ?? '', 400)}`,
   ].join('\n')

@@ -104,12 +104,28 @@ export function chunksCovering(chunks: string[], length: number): number {
 
 /** Keeps exactly the first `length` characters. The array keeps its length; later chunks become empty. */
 export function truncateChunks(chunks: string[], length: number): string[] {
-  let remaining = length
+  return sliceChunks(chunks, 0, length)
+}
+
+/** Keeps only characters `from` to `to` of the joined chunks. The array keeps its length. */
+export function sliceChunks(chunks: string[], from: number, to: number): string[] {
+  let offset = 0
   return chunks.map((chunk) => {
-    const kept = chunk.slice(0, Math.max(0, remaining))
-    remaining -= chunk.length
-    return kept
+    const start = Math.max(0, from - offset)
+    const end = Math.min(chunk.length, to - offset)
+    offset += chunk.length
+    return start < end ? chunk.slice(start, end) : ''
   })
+}
+
+/** A line that only marks structure: a scene break (***, - - -, ⁂), a [ bracketed heading ] or "Chapter 2". */
+export function isSceneMarker(sentence: string): boolean {
+  const line = sentence.trim()
+  return (
+    /^(?:⁂|(?:[*\-_~=#•]\s*){3,})$/.test(line) ||
+    /^\[[^\]\n]{1,100}\]$/.test(line) ||
+    /^(?:chapter|part|book|act)\s+(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b[^.!?\n]{0,80}$/i.test(line)
+  )
 }
 
 function isSpace(ch: string): boolean {

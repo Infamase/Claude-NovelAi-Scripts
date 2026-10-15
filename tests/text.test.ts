@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { chunksCovering, findSentenceEnd, isComplete, quoteMask, splitSentences, truncateChunks } from '../src/guard/text.ts'
+import { chunksCovering, findSentenceEnd, isComplete, isSceneMarker, quoteMask, sliceChunks, splitSentences, truncateChunks } from '../src/guard/text.ts'
 
 describe('findSentenceEnd', () => {
   const firstSentence = (text: string) => {
@@ -65,6 +65,28 @@ describe('truncateChunks', () => {
     assert.deepEqual(truncateChunks(['The', ' ale.', ' The', ' end'], 8), ['The', ' ale.', '', ''])
     assert.deepEqual(truncateChunks(['The', ' ale. The'], 8), ['The', ' ale.'])
     assert.deepEqual(truncateChunks(['ab', 'cd'], 0), ['', ''])
+  })
+})
+
+describe('sliceChunks', () => {
+  it('keeps a middle stretch of the text, keeping the array length', () => {
+    assert.deepEqual(sliceChunks(['***', '\n', 'The', ' end.', ' More'], 4, 12), ['', '', 'The', ' end.', ''])
+    assert.deepEqual(sliceChunks(['ab', 'cd', 'ef'], 1, 5), ['b', 'cd', 'e'])
+    assert.deepEqual(sliceChunks(['ab'], 2, 2), [''])
+  })
+})
+
+describe('isSceneMarker', () => {
+  it('spots scene breaks, bracketed headings and chapter lines', () => {
+    for (const marker of ['***', ' * * * ', '- - -', '---', '⁂', '\n[ Dragonfire and Doubts ]', '[ Chapter 2 ]', 'Chapter 3: The Hoard', 'Part II']) {
+      assert.ok(isSceneMarker(marker), marker)
+    }
+  })
+
+  it('leaves ordinary sentences alone', () => {
+    for (const text of ['The dragon waits.', 'Part of the wall collapses.', '"***," she curses.', '[She laughs.] Then silence.', 'Chapter and verse, she recites.']) {
+      assert.ok(!isSceneMarker(text), text)
+    }
   })
 })
 
