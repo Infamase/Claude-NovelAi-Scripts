@@ -8,7 +8,7 @@ A NovelAI user script for Text Adventure mode on GLM 4.6:
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.1.0, Phase 0 preview
+## Status: v0.1.1, Phase 0 preview
 
 This version is the shell: a settings panel, placeholder Party and Inventory tabs, and a **stop test** that checks how NovelAI handles the script cutting a response short.
 

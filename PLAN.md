@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 0 built (v0.1.0)**. Waiting on the in-NovelAI checks (see README).
+Status: **Phase 0 built (v0.1.1)**. Waiting on the in-NovelAI checks (see README).
 
 ---
 

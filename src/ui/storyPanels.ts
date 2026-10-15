@@ -6,12 +6,14 @@ let visible = false
 
 export async function setStoryPanelsVisible(show: boolean): Promise<void> {
   if (show === visible) return
-  if (show) await api.v1.ui.register([partyPanel(), inventoryPanel()])
+  // ui.register replaces every extension the script has (it would remove the sidebar panel), so
+  // panels added later go through ui.update, which adds extensions alongside the existing ones.
+  if (show) await api.v1.ui.update([partyPanel(), inventoryPanel()])
   else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel])
   visible = show
 }
 
-function partyPanel(): UIExtensionScriptPanel {
+function partyPanel(): UIExtensionScriptPanel & { id: string } {
   return {
     type: 'scriptPanel',
     id: IDS.partyPanel,
@@ -33,7 +35,7 @@ function partyPanel(): UIExtensionScriptPanel {
   }
 }
 
-function inventoryPanel(): UIExtensionScriptPanel {
+function inventoryPanel(): UIExtensionScriptPanel & { id: string } {
   return {
     type: 'scriptPanel',
     id: IDS.inventoryPanel,

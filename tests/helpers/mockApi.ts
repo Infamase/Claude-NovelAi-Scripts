@@ -17,6 +17,10 @@ export function installMockApi(options: MockOptions = {}) {
   const timers: (() => void)[] = []
   const toasts: string[] = []
   const sections: { text: string; source?: string; origin: { data: string }[] }[] = []
+  // Like NovelAI: register replaces all of the script's extensions, update adds or merges by id.
+  const extensions = new Map<string, any>()
+  let unnamed = 0
+  const keyOf = (extension: any) => extension.id ?? `unnamed-${unnamed++}`
 
   const storage = {
     get: async (key: string) => (story.has(key) ? structuredClone(story.get(key)) : undefined),
@@ -43,7 +47,21 @@ export function installMockApi(options: MockOptions = {}) {
         scan: async () =>
           sections.map((section, index) => ({ sectionId: index + 1, index, section: { formatting: [], ...section } })),
       },
-      ui: { toast: async (message: string) => void toasts.push(message) },
+      ui: {
+        toast: async (message: string) => void toasts.push(message),
+        register: async (list: any[]) => {
+          extensions.clear()
+          for (const extension of list) extensions.set(keyOf(extension), extension)
+        },
+        update: async (list: any[]) => {
+          for (const extension of list) {
+            extensions.set(extension.id, { ...extensions.get(extension.id), ...extension })
+          }
+        },
+        remove: async (ids: string[]) => {
+          for (const id of ids) extensions.delete(id)
+        },
+      },
     },
   }
 
@@ -58,6 +76,7 @@ export function installMockApi(options: MockOptions = {}) {
     story,
     toasts,
     sections,
+    extensions,
     runTimers: async () => {
       for (const callback of timers.splice(0)) await callback()
       await new Promise((resolve) => setTimeout(resolve, 0))

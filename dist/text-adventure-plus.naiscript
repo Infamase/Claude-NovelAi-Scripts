@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792064243612
-version: 0.1.0
+updatedAt: 1792064861399
+version: 0.1.1
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -330,7 +330,7 @@ memoryLimit: 8
   var visible = false;
   async function setStoryPanelsVisible(show) {
     if (show === visible) return;
-    if (show) await api.v1.ui.register([partyPanel(), inventoryPanel()]);
+    if (show) await api.v1.ui.update([partyPanel(), inventoryPanel()]);
     else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel]);
     visible = show;
   }
