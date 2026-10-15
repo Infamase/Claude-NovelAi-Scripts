@@ -101,7 +101,8 @@ export function findRetelling(text: string, sentences: Sentence[], playerInput?:
     const squashed = squash(sentences[i].text)
     if (!lines.some((line) => squashed.includes(line))) continue
     const own = narrationOf(text, mask, sentences[i]).trim()
-    const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]) : ''
+    // Trimmed: each sentence carries the whitespace or line break before it.
+    const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]).trim() : ''
     // The player's words if tagged as their speech ("you ask"), or if the line stands alone, complete,
     // at the start or right after narration about the player character ("your voice finds itself").
     const standalone = own === '' && /^["“][^"”]*["”]$/.test(sentences[i].text.trim())

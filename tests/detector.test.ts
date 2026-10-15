@@ -113,6 +113,18 @@ describe('findRetelling', () => {
     assert.equal(retold(reply, 'You restate "H-Hunter."'), 3)
   })
 
+  it('finds it when the sentence before the repeat starts with "Your"', () => {
+    // From the sixth playtest, with line breaks as in the story and with plain spaces.
+    const opening = [
+      'Your heart pounds in your chest, drowning out the steady drip of water.',
+      'Your lips part, and the word slips out like a curse.',
+      '"H-Hunter."',
+      'She stares at you, unblinking.',
+    ]
+    assert.equal(retold(opening.join('\n'), 'You restate "H-Hunter."'), 3)
+    assert.equal(retold(opening.join(' '), 'You restate "H-Hunter."'), 3)
+  })
+
   it('counts a bare repeat at the very start, or one tagged with "you"', () => {
     assert.equal(retold('"Hello." The dragon tilts her head.', 'You say "Hello."'), 1)
     assert.equal(retold('"Who are you," you ask again. She laughs.', 'You ask "Who are you?"'), 1)

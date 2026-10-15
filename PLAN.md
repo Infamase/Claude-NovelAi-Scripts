@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 1 (v0.2.5)**: the turn guard, tuning from playtests.
+Status: **Phase 1 (v0.2.6)**: the turn guard, tuning from playtests.
 
 ---
 
@@ -190,6 +190,7 @@ dist/text-adventure-plus.naiscript   ← the file you import
 - **Third playtest (v0.2.2):** a good reply up to "The dragon waits.", but it began with a stray `***`, and after that line the AI started a new "chapter" (`***`, `[ Dragonfire and Doubts ]`) before writing for the player. Both markers were kept because the cut came after them. v0.2.3 removes scene breaks and headings at the start of a reply, cuts at any later one, and adds a "stay in this scene" rule. The referee also fell back to GLM 4.6 once; details now show which attempt failed first.
 - **Fourth playtest (v0.2.3):** a clean turn, cut at a `- - -` scene break. After the break the dragon answered a reply the player never gave ("So you were lost. Convenient."), so the cut was right, but only because the scene break came first. v0.2.4 tells the AI to end the reply when someone waits for the player's answer, and the referee now flags anyone reacting to an answer that was never given.
 - **Fifth playtest (v0.2.4):** the reply opened by retelling the player's typed line with an added thought ("You're not sure why you do, but your voice finds itself… \"H-Hunter.\""). The referee cut there, losing the dragon's whole response. v0.2.5 removes such an opening instead (a pattern check for repeats of the typed line, and a second number in the referee's answer) and keeps checking the rest; the rules now say to begin with the world's response. The referee's story-model call failed with "Error 429: Concurrent generation is locked" (a second Xialong generation during the reply), so the referee now tries GLM 4.6 first.
+- **Sixth playtest (v0.2.5):** the dragon's whole response was kept and the cut landed on the player character's memory, but the opening retelling ("Your lips part, and the word slips out like a curse. \"H-Hunter.\"") stayed: the retelling check didn't trim the line break carried by the sentence before the repeat, so "Your lips…" didn't count as starting with "Your". Fixed in v0.2.6, with that opening as a test.
 
 ## 11. Risks
 

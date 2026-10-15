@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792077777387
-version: 0.2.5
+updatedAt: 1792079808316
+version: 0.2.6
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -199,7 +199,7 @@ memoryLimit: 8
       const squashed = squash(sentences[i].text);
       if (!lines.some((line) => squashed.includes(line))) continue;
       const own = narrationOf(text, mask, sentences[i]).trim();
-      const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]) : "";
+      const before = i > 0 ? narrationOf(text, mask, sentences[i - 1]).trim() : "";
       const standalone = own === "" && /^["“][^"”]*["”]$/.test(sentences[i].text.trim());
       if (SPEECH.test(own) || standalone && (i === 0 || YOU_AS_SUBJECT.test(before))) end = i + 1;
     }
