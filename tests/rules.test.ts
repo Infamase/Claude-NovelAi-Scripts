@@ -40,6 +40,9 @@ describe('narratorRules', () => {
     const rules = narratorRules(false)
     assert.match(rules, /Never write the player character's speech, thoughts, decisions or deliberate actions/)
     assert.match(rules, /Never continue a conversation on their behalf/)
+    // From the fourth playtest: the dragon answered a reply the player never gave.
+    assert.match(rules, /When someone asks them something or waits for their answer, end the reply there/)
+    assert.match(rules, /never have anyone react to an answer they haven't given/)
     assert.match(rules, /never on a question to the player: do not ask what they do/)
     assert.match(rules, /Keep it short/)
     assert.match(rules, /Stay in this scene: no scene breaks, headings or chapter titles/)
@@ -75,6 +78,7 @@ describe('referee', () => {
     assert.match(user.content ?? '', /\n1\. Her\?\n2\. The dragon is\.\.\. a woman\?\n/)
     assert.match(user.content ?? '', /never a reason to flag a sentence: .*such as a dry mouth, a racing heart/)
     assert.match(user.content ?? '', /Only flag a sentence that clearly breaks the rule/)
+    assert.match(user.content ?? '', /another character reacting to an answer or action from the player character that never happened/)
     const [, strictUser] = refereePrompt({ sentences: ['x'], strict: true })
     assert.match(strictUser.content ?? '', /not even physical reactions or sensations/)
     assert.doesNotMatch(strictUser.content ?? '', /dry mouth/)

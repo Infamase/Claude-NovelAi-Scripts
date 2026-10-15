@@ -59,6 +59,7 @@ export function refereePrompt({ storyTail, playerInput, sentences, strict }: Ref
     '- the player character speaking, including quoted lines that are the player character\'s words even when no speaker is named',
     '- the player character\'s thoughts, questions to themselves, conclusions or plans',
     '- the player character deciding something, or doing something deliberate that the player did not type',
+    '- another character reacting to an answer or action from the player character that never happened, which means the narrator skipped past the player\'s turn',
     '- asking the player what they do, offering them choices, or speaking to the player directly',
     allowed,
     '',

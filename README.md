@@ -8,7 +8,7 @@ A NovelAI user script for Text Adventure mode on Xialong or GLM 4.6:
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.2.3, Phase 1 (the turn guard)
+## Status: v0.2.4, Phase 1 (the turn guard)
 
 How each turn works:
 

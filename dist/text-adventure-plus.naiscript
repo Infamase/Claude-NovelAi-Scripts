@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792074600145
-version: 0.2.3
+updatedAt: 1792075766830
+version: 0.2.4
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -251,6 +251,7 @@ memoryLimit: 8
       "- the player character speaking, including quoted lines that are the player character's words even when no speaker is named",
       "- the player character's thoughts, questions to themselves, conclusions or plans",
       "- the player character deciding something, or doing something deliberate that the player did not type",
+      "- another character reacting to an answer or action from the player character that never happened, which means the narrator skipped past the player's turn",
       "- asking the player what they do, offering them choices, or speaking to the player directly",
       allowed,
       "",
@@ -365,7 +366,7 @@ memoryLimit: 8
       "Narrate what happens as a direct result of this, then stop. Rules:",
       "1. Write only the world's response: what the other characters and any companions say and do, and what the player character sees and hears.",
       strict ? "2. Never write anything the player character says, thinks, feels, decides or does beyond what the player wrote, not even physical reactions." : "2. Never write the player character's speech, thoughts, decisions or deliberate actions beyond what the player wrote. Involuntary physical reactions, like a flinch or a racing heart, are fine.",
-      "3. Stop at the first moment the player character could speak, act or decide. Never continue a conversation on their behalf.",
+      "3. Stop at the first moment the player character could speak, act or decide. When someone asks them something or waits for their answer, end the reply there. Never continue a conversation on their behalf, and never have anyone react to an answer they haven't given.",
       "4. Stay in this scene: no scene breaks, headings or chapter titles, and no skipping ahead in time.",
       "5. End on the world, never on a question to the player: do not ask what they do, offer choices or address them.",
       "6. Keep it short: one to three short paragraphs."
