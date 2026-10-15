@@ -5,6 +5,7 @@ import { registerTurnGuard, runRefereeTest } from '../src/guard/turnGuard.ts'
 import { GAME_FRAMING } from '../src/guard/rules.ts'
 import { KEYS } from '../src/keys.ts'
 import { INV, addItem, initInventory } from '../src/state/inventory.ts'
+import { PARTY, addMember, initParty } from '../src/state/party.ts'
 
 type Mock = ReturnType<typeof installMockApi>
 
@@ -75,6 +76,21 @@ describe('turn guard', () => {
     mock.story.set(INV.share, false)
     await turn(mock, 'You wait.', 'Time passes.')
     assert.doesNotMatch(mock.last.context?.[3].content ?? '', /Game state/)
+  })
+
+  it('sends the party before the inventory', async () => {
+    const mock = await setup()
+    await initInventory()
+    await initParty()
+    const lyra = await addMember()
+    mock.story.set(PARTY.member(lyra, 'name'), 'Lyra')
+    mock.story.set(PARTY.member(lyra, 'role'), 'elf ranger')
+    mock.story.set(INV.amount, 3)
+    await turn(mock, 'You wait.', 'Time passes.')
+    assert.match(
+      mock.last.context?.[3].content ?? '',
+      /\n\nGame state \(keep the story consistent with it\):\n- Companion: Lyra, elf ranger\. Status: Healthy\. Attitude toward you: Neutral\.\n- Money: 3 gold\./,
+    )
   })
 
   it('keeps a reply that stays on the right side of the line', async () => {

@@ -3,8 +3,8 @@ compatibilityVersion: naiscript-1.0
 id: 37ab87de-bafd-4cf2-8fc1-3ce1741c8677
 name: Text Adventure+
 createdAt: 1792063961849
-updatedAt: 1792081759122
-version: 0.3.0
+updatedAt: 1792083243545
+version: 0.4.0
 author: Infamase
 description: Stops Text Adventure output when it is your turn, and adds Party and Inventory tabs that feed the story context.
 memoryLimit: 8
@@ -97,8 +97,8 @@ memoryLimit: 8
     }
     return sentences;
   }
-  function isComplete(sentence) {
-    return /(?:[.!?…]|[—–-]["”’])["'”’)\]*_]*\s*$/.test(sentence);
+  function isComplete(sentence2) {
+    return /(?:[.!?…]|[—–-]["”’])["'”’)\]*_]*\s*$/.test(sentence2);
   }
   function quoteMask(text2) {
     const mask = [];
@@ -127,8 +127,8 @@ memoryLimit: 8
       return start < end ? chunk.slice(start, end) : "";
     });
   }
-  function isSceneMarker(sentence) {
-    const line = sentence.trim();
+  function isSceneMarker(sentence2) {
+    const line = sentence2.trim();
     return /^(?:⁂|(?:[*\-_~=#•]\s*){3,})$/.test(line) || /^\[[^\]\n]{1,100}\]$/.test(line) || /^(?:chapter|part|book|act)\s+(?:\d+|[ivxlc]+|one|two|three|four|five|six|seven|eight|nine|ten)\b[^.!?\n]{0,80}$/i.test(line);
   }
   function isSpace(ch) {
@@ -183,8 +183,8 @@ memoryLimit: 8
     const mask = quoteMask(text2);
     const typed = new Set(words(options.playerInput ?? "").map(stem));
     for (let index = 0; index < sentences.length; index++) {
-      const sentence = sentences[index];
-      const reason = checkSentence(sentence.text.trim(), narrationOf(text2, mask, sentence).trim(), typed, options);
+      const sentence2 = sentences[index];
+      const reason = checkSentence(sentence2.text.trim(), narrationOf(text2, mask, sentence2).trim(), typed, options);
       if (reason) return { index, reason };
     }
     return void 0;
@@ -213,9 +213,9 @@ memoryLimit: 8
   function squash(text2) {
     return text2.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
   }
-  function narrationOf(text2, mask, sentence) {
+  function narrationOf(text2, mask, sentence2) {
     let narration = "";
-    for (let i = sentence.start; i < sentence.end; i++) narration += mask[i] ? " " : text2[i];
+    for (let i = sentence2.start; i < sentence2.end; i++) narration += mask[i] ? " " : text2[i];
     return narration;
   }
   function checkSentence(raw, narration, typed, options) {
@@ -395,6 +395,28 @@ memoryLimit: 8
     return String(error);
   }
 
+  // src/state/store.ts
+  function text(value) {
+    return typeof value === "string" ? value : value == null ? "" : String(value);
+  }
+  function count(value, fallback) {
+    if (value === "" || value == null) return fallback;
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback;
+  }
+  async function idList(key) {
+    const ids = await api.v1.storyStorage.get(key);
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  }
+  async function moveInList(key, id, delta) {
+    const ids = await idList(key);
+    const from = ids.indexOf(id);
+    const to = from + delta;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    await api.v1.storyStorage.set(key, ids);
+  }
+
   // src/state/inventory.ts
   var INV = {
     share: "tap.inv.share",
@@ -480,17 +502,79 @@ memoryLimit: 8
   function priceList(guide) {
     return guide.split("\n").map((line) => line.trim().replace(/\s*[:=–—-]\s*(?=[\d.,]+\s*\S*$)/, " ")).filter((line) => line !== "").join(", ");
   }
-  async function itemIds() {
-    const ids = await api.v1.storyStorage.get(INV.items);
-    return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+  function itemIds() {
+    return idList(INV.items);
   }
-  function text(value) {
-    return typeof value === "string" ? value : value == null ? "" : String(value);
+
+  // src/state/party.ts
+  var PARTY = {
+    share: "tap.party.share",
+    /** The member ids, in the order shown. */
+    members: "tap.party.members",
+    /** What the AI sees, for the tab's preview. */
+    preview: "tap.party.preview",
+    member: (id, field) => `tap.party.member.${id}.${field}`
+  };
+  var STATUS_PRESETS = ["Healthy", "Wounded", "Exhausted", "Unconscious"];
+  var ATTITUDE_PRESETS = ["Hostile", "Wary", "Neutral", "Friendly", "Loyal"];
+  var MEMBER_FIELDS = ["name", "role", "status", "attitude", "notes", "present"];
+  var NEW_MEMBER = {
+    name: "",
+    role: "",
+    status: "Healthy",
+    attitude: "Neutral",
+    notes: "",
+    present: true
+  };
+  async function initParty() {
+    await api.v1.storyStorage.setIfAbsent(PARTY.share, true);
+    await api.v1.storyStorage.setIfAbsent(PARTY.members, []);
   }
-  function count(value, fallback) {
-    if (value === "" || value == null) return fallback;
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback;
+  async function readParty() {
+    const s = api.v1.storyStorage;
+    const members = await Promise.all(
+      (await idList(PARTY.members)).map(async (id) => ({
+        id,
+        name: text(await s.get(PARTY.member(id, "name"))),
+        role: text(await s.get(PARTY.member(id, "role"))),
+        status: text(await s.get(PARTY.member(id, "status"))),
+        attitude: text(await s.get(PARTY.member(id, "attitude"))),
+        notes: text(await s.get(PARTY.member(id, "notes"))),
+        present: await s.get(PARTY.member(id, "present")) !== false
+      }))
+    );
+    return { share: await s.get(PARTY.share) !== false, members };
+  }
+  async function addMember() {
+    const id = api.v1.uuid();
+    const s = api.v1.storyStorage;
+    for (const field of MEMBER_FIELDS) await s.set(PARTY.member(id, field), NEW_MEMBER[field]);
+    await s.set(PARTY.members, [...await idList(PARTY.members), id]);
+    return id;
+  }
+  async function removeMember(id) {
+    const s = api.v1.storyStorage;
+    await s.set(PARTY.members, (await idList(PARTY.members)).filter((other) => other !== id));
+    for (const field of MEMBER_FIELDS) await s.remove(PARTY.member(id, field));
+  }
+  function moveMember(id, delta) {
+    return moveInList(PARTY.members, id, delta);
+  }
+  function partyLines(party) {
+    if (!party.share) return [];
+    return party.members.filter((member) => member.present && member.name.trim() !== "").map((member) => {
+      const role = member.role.trim();
+      const parts = [`Companion: ${member.name.trim()}${role ? `, ${role}` : ""}.`];
+      if (member.status.trim()) parts.push(`Status: ${sentence(member.status)}`);
+      if (member.attitude.trim()) parts.push(`Attitude toward you: ${sentence(member.attitude)}`);
+      const notes = member.notes.split("\n").filter((line) => line.trim() !== "").map(sentence);
+      if (notes.length > 0) parts.push(`Notes: ${notes.join(" ")}`);
+      return parts.join(" ");
+    });
+  }
+  function sentence(value) {
+    const trimmed = value.trim();
+    return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
   }
 
   // src/state/gameState.ts
@@ -499,7 +583,7 @@ memoryLimit: 8
     return ["Game state (keep the story consistent with it):", ...lines.map((line) => `- ${line}`)].join("\n");
   }
   async function gameStateText() {
-    return gameStateBlock(inventoryLines(await readInventory()));
+    return gameStateBlock([...partyLines(await readParty()), ...inventoryLines(await readInventory())]);
   }
 
   // src/guard/rules.ts
@@ -702,9 +786,9 @@ ${second}` : second;
     const retold = d.lead - d.markers;
     const lines = [];
     if (d.cut) {
-      const sentence = quote(d.sentences[d.cut.index].text.trim(), 120);
+      const sentence2 = quote(d.sentences[d.cut.index].text.trim(), 120);
       lines.push(
-        kept === 0 ? `Last turn: nothing was kept. The reply started by writing for your character: ${sentence}` : `Last turn: kept ${kept} of ${total} sentences. Cut from: ${sentence}`,
+        kept === 0 ? `Last turn: nothing was kept. The reply started by writing for your character: ${sentence2}` : `Last turn: kept ${kept} of ${total} sentences. Cut from: ${sentence2}`,
         `Why: ${d.cut.reason} (found by the ${d.cut.by === "referee" ? "referee" : "pattern rules"}).`
       );
       if (kept === 0 && turn?.retryNumber !== void 0) {
@@ -795,10 +879,35 @@ ${second}` : second;
     return text2.replace(/\{\{/g, "{ {");
   }
 
-  // src/ui/inventoryPanel.ts
+  // src/ui/common.ts
   var MUTED = { opacity: 0.7, fontSize: "0.85em" };
-  var previewPending = false;
-  async function inventoryPanel(rebuild) {
+  function debounced(run, delay = 300) {
+    let pending = false;
+    return () => {
+      if (pending) return;
+      pending = true;
+      api.v1.timers.setTimeout(() => {
+        pending = false;
+        run().catch(logError);
+      }, delay).catch(logError);
+    };
+  }
+  function previewSection(key) {
+    return {
+      type: "collapsibleSection",
+      title: "What the AI sees",
+      iconId: "eye",
+      initialCollapsed: true,
+      content: [{ type: "text", text: `{{story:${key}}}`, style: { whiteSpace: "pre-wrap", fontSize: "0.9em" } }]
+    };
+  }
+  function forTemplate(value) {
+    return value.replace(/\{\{/g, "{ {");
+  }
+
+  // src/ui/inventoryPanel.ts
+  var schedulePreview = debounced(() => updatePreview());
+  async function inventoryPanel(rebuild2) {
     const inv = await readInventory();
     updatePreview(inv).catch(logError);
     const edited = () => schedulePreview();
@@ -815,14 +924,8 @@ ${second}` : second;
           onChange: edited
         },
         moneySection(edited),
-        itemsSection(inv, rebuild, edited),
-        {
-          type: "collapsibleSection",
-          title: "What the AI sees",
-          iconId: "eye",
-          initialCollapsed: true,
-          content: [{ type: "text", text: `{{story:${INV.preview}}}`, style: { whiteSpace: "pre-wrap", fontSize: "0.9em" } }]
-        }
+        itemsSection(inv, rebuild2, edited),
+        previewSection(INV.preview)
       ]
     };
   }
@@ -867,23 +970,23 @@ ${second}` : second;
       ]
     };
   }
-  function itemsSection(inv, rebuild, edited) {
+  function itemsSection(inv, rebuild2, edited) {
     return {
       type: "box",
       content: [
         { type: "text", markdown: true, text: "**Items**" },
-        ...inv.items.length > 0 ? inv.items.map((item) => itemPart(item, rebuild, edited)) : [{ type: "text", text: "Nothing yet.", style: MUTED }],
+        ...inv.items.length > 0 ? inv.items.map((item) => itemPart(item, rebuild2, edited)) : [{ type: "text", text: "Nothing yet.", style: MUTED }],
         {
           type: "button",
           text: "Add item",
           iconId: "plus",
           disabledWhileCallbackRunning: true,
-          callback: () => addItem().then(rebuild).catch(logError)
+          callback: () => addItem().then(rebuild2).catch(logError)
         }
       ]
     };
   }
-  function itemPart(item, rebuild, edited) {
+  function itemPart(item, rebuild2, edited) {
     const key = (field) => `story:${INV.item(item.id, field)}`;
     return {
       type: "column",
@@ -905,7 +1008,7 @@ ${second}` : second;
               type: "button",
               text: "Remove",
               iconId: "trash-2",
-              callback: () => removeItem(item.id).then(rebuild).catch(logError)
+              callback: () => removeItem(item.id).then(rebuild2).catch(logError)
             }
           ]
         },
@@ -925,33 +1028,19 @@ ${second}` : second;
       callback: () => adjustCount(key, delta, fallback).then(edited).catch(logError)
     };
   }
-  function schedulePreview() {
-    if (previewPending) return;
-    previewPending = true;
-    api.v1.timers.setTimeout(() => {
-      previewPending = false;
-      updatePreview().catch(logError);
-    }, 300).catch(logError);
-  }
   async function updatePreview(inv) {
     const current = inv ?? await readInventory();
     const block = gameStateBlock(inventoryLines(current));
     const text2 = !current.share ? "Nothing: sending the inventory is turned off above." : block ?? "Nothing yet. Add money or an item, and it will be sent with every turn.";
-    await api.v1.storyStorage.set(INV.preview, text2.replace(/\{\{/g, "{ {"));
+    await api.v1.storyStorage.set(INV.preview, forTemplate(text2));
   }
 
-  // src/ui/storyPanels.ts
-  var visible = false;
-  async function setStoryPanelsVisible(show) {
-    if (show === visible) return;
-    if (show) await api.v1.ui.update([partyPanel(), await inventoryPanel(rebuildInventory)]);
-    else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel]);
-    visible = show;
-  }
-  async function rebuildInventory() {
-    if (visible) await api.v1.ui.update([await inventoryPanel(rebuildInventory)]);
-  }
-  function partyPanel() {
+  // src/ui/partyPanel.ts
+  var schedulePreview2 = debounced(() => updatePartyPreview());
+  async function partyPanel(rebuild2) {
+    const party = await readParty();
+    updatePartyPreview(party).catch(logError);
+    const edited = () => schedulePreview2();
     return {
       type: "scriptPanel",
       id: IDS.partyPanel,
@@ -959,16 +1048,133 @@ ${second}` : second;
       iconId: "users",
       content: [
         {
+          type: "checkboxInput",
+          label: "Tell the AI about my party",
+          storageKey: `story:${PARTY.share}`,
+          onChange: edited
+        },
+        {
           type: "text",
-          markdown: true,
-          text: [
-            "**Party** (coming in Phase 3)",
-            "",
-            "Your companions will be listed here with their role, status (healthy, wounded…), attitude toward you and notes. Members marked *in party* are added to the AI's context every turn."
-          ].join("\n")
+          text: 'Companions speak and act for themselves; only your own character is protected. Untick "In party" for someone who is away: they stay listed but are not sent.',
+          style: MUTED
+        },
+        ...party.members.length > 0 ? party.members.map((member, index) => memberPart(member, index, party.members.length, rebuild2, edited)) : [{ type: "text", text: "No companions yet.", style: MUTED }],
+        {
+          type: "button",
+          text: "Add companion",
+          iconId: "user-plus",
+          disabledWhileCallbackRunning: true,
+          callback: () => addMember().then(rebuild2).catch(logError)
+        },
+        previewSection(PARTY.preview)
+      ]
+    };
+  }
+  function memberPart(member, index, total, rebuild2, edited) {
+    const key = (field) => PARTY.member(member.id, field);
+    const presets = (field, words2) => words2.map((word) => ({
+      type: "button",
+      text: word,
+      callback: () => api.v1.storyStorage.set(key(field), word).then(edited).catch(logError)
+    }));
+    return {
+      type: "box",
+      id: `tap-member-${member.id}`,
+      content: [
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Name", placeholder: "Name", storageKey: `story:${key("name")}`, onChange: edited, style: { width: "10em" } },
+            {
+              type: "textInput",
+              label: "Who they are",
+              placeholder: "elf ranger, your guide",
+              storageKey: `story:${key("role")}`,
+              onChange: edited,
+              style: { flex: "1 1 12em" }
+            },
+            { type: "checkboxInput", label: "In party", storageKey: `story:${key("present")}`, onChange: edited }
+          ]
+        },
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Status", storageKey: `story:${key("status")}`, onChange: edited, style: { width: "12em" } },
+            ...presets("status", STATUS_PRESETS)
+          ]
+        },
+        {
+          type: "row",
+          wrap: true,
+          spacing: "start",
+          alignment: "end",
+          content: [
+            { type: "textInput", label: "Attitude toward you", storageKey: `story:${key("attitude")}`, onChange: edited, style: { width: "12em" } },
+            ...presets("attitude", ATTITUDE_PRESETS)
+          ]
+        },
+        {
+          type: "textInput",
+          label: "Notes",
+          placeholder: "Personality, goals, secrets (optional)",
+          storageKey: `story:${key("notes")}`,
+          onChange: edited
+        },
+        {
+          type: "row",
+          spacing: "start",
+          content: [
+            {
+              type: "button",
+              text: "Move up",
+              iconId: "arrow-up",
+              disabled: index === 0,
+              callback: () => moveMember(member.id, -1).then(rebuild2).catch(logError)
+            },
+            {
+              type: "button",
+              text: "Move down",
+              iconId: "arrow-down",
+              disabled: index === total - 1,
+              callback: () => moveMember(member.id, 1).then(rebuild2).catch(logError)
+            },
+            {
+              type: "button",
+              text: "Remove",
+              iconId: "trash-2",
+              callback: () => removeMember(member.id).then(rebuild2).catch(logError)
+            }
+          ]
         }
       ]
     };
+  }
+  async function updatePartyPreview(party) {
+    const current = party ?? await readParty();
+    const block = gameStateBlock(partyLines(current));
+    const text2 = !current.share ? "Nothing: sending the party is turned off above." : block ?? "Nothing yet. Add a companion with a name, and they will be sent with every turn.";
+    await api.v1.storyStorage.set(PARTY.preview, forTemplate(text2));
+  }
+
+  // src/ui/storyPanels.ts
+  var visible = false;
+  async function setStoryPanelsVisible(show) {
+    if (show === visible) return;
+    if (show) await api.v1.ui.update(await storyPanels());
+    else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel]);
+    visible = show;
+  }
+  async function rebuild() {
+    if (visible) await api.v1.ui.update(await storyPanels());
+  }
+  async function storyPanels() {
+    return [await partyPanel(rebuild), await inventoryPanel(rebuild)];
   }
 
   // src/ui/settingsPanel.ts
@@ -1082,6 +1288,7 @@ ${second}` : second;
     await api.v1.storyStorage.setIfAbsent(KEYS.refereeTest, "Not run yet.");
     for (const key of OLD_STORY_KEYS) await api.v1.storyStorage.remove(key);
     await initInventory();
+    await initParty();
     await registerSettingsPanel();
     const enabled = await api.v1.storyStorage.get(KEYS.enabled) === true;
     await setStoryPanelsVisible(enabled);

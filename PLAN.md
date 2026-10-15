@@ -2,7 +2,7 @@
 
 *Working title. A NovelAI user script that makes Text Adventure mode stop when it is your turn, and adds Party and Inventory tabs that feed the story's context.*
 
-Status: **Phase 2 built (v0.3.0)**: the Inventory tab. Waiting on playtesting.
+Status: **Phase 3 built (v0.4.0)**: the Party tab. Next: Phase 4 polish.
 
 ---
 
@@ -91,18 +91,19 @@ If the length limit cut the reply off mid-sentence, the unfinished last sentence
 
 The tab is a NovelAI **Script Panel**. Script Panels sit just above the bottom controls and appear as tabs there; only one is open at a time.
 
-Each member has:
-- **Name** and a **short description** (race/class/role)
-- **Status**: free text, plus quick buttons (Healthy / Wounded / Exhausted / Unconscious)
-- **Attitude toward you**: a slider from Hostile to Devoted
-- **Notes** (personality, goals); these are only injected when filled in
-- an **In party** checkbox, so benched members are remembered but not injected
+Each companion has:
+- **Name** and **Who they are** (race, class, role: "elf ranger, your guide")
+- **Status**: free text, with quick picks (Healthy / Wounded / Exhausted / Unconscious)
+- **Attitude toward you**: free text, with quick picks (Hostile / Wary / Neutral / Friendly / Loyal). Text rather than a slider, so it can say "loyal but resentful"
+- **Notes** (personality, goals, secrets), sent only when filled in
+- **In party**: untick for someone who is away; they stay listed but are not sent
 
-Plus Add, Remove and Move up/down buttons, and a collapsible **"What the AI sees"** preview.
+Plus Move up / Move down / Remove, **Add companion**, a switch to stop sending, and a **What the AI sees** preview. Companions speak and act for themselves; only the player character is protected.
 
-What gets injected (kept compact to save tokens):
+What gets sent, as part of the game state (before the inventory):
 ```
-[ Party: Lyra (elf ranger; wounded; trusts you), Bram (dwarf smith; healthy; wary of you) ]
+- Companion: Lyra, elf ranger, your guide. Status: Wounded. Attitude toward you: Friendly. Notes: Quick-tempered. Looking for her brother.
+- Companion: Bram, dwarf smith. Status: Healthy. Attitude toward you: Loyal.
 ```
 
 ## 6. Inventory tab (bottom bar)
@@ -170,8 +171,8 @@ dist/text-adventure-plus.naiscript   ← the file you import
 |---|---|---|
 | **0 — Scaffold** (done) | Repo tooling, typings, build, test runner. A stub script that registers empty Party and Inventory tabs and a settings panel. Also a test of how `stopGeneration` behaves together with trimmed text in `onResponse`. | Import it and confirm the tabs show up where you expect. |
 | **1 — Turn guard** (done; tuned through v0.2.6) | Narration rules, hold-and-check with the pattern rules and the referee, and the Last turn report. | Play a few scenes and send me any turns that were cut too early or too late. |
-| **2 — Inventory** (built, v0.3.0) | The Inventory tab, its context injection, and the preview. | Check that the AI respects what you carry and have equipped. |
-| **3 — Party** | The Party tab, its context injection, and the preview. | Check that companions act in character. |
+| **2 — Inventory** (done, v0.3.0) | The Inventory tab, its context injection, and the preview. | Check that the AI respects what you carry and have equipped. |
+| **3 — Party** (built, v0.4.0) | The Party tab, its context injection, and the preview. | Check that companions act in character. |
 | **4 — Polish → v1.0** | The length cap, settings, detector tuning from your feedback, a README, and the v1.0 release. | Final playtest. |
 
 **Later ideas:** auto-tracking ("you pick up the key" → a suggested inventory change), linking party members to existing Lorebook entries, simple stats, and state that follows undo/redo.

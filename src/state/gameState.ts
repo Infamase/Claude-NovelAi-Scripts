@@ -1,7 +1,7 @@
-// The game state the AI gets next to the player's action each turn: the inventory now, the party
-// in Phase 3.
+// The game state the AI gets next to the player's action each turn: the party, then the inventory.
 
 import { inventoryLines, readInventory } from './inventory.ts'
+import { partyLines, readParty } from './party.ts'
 
 /** Formats state lines as the block the AI sees, or undefined if there is nothing to tell. */
 export function gameStateBlock(lines: string[]): string | undefined {
@@ -10,5 +10,5 @@ export function gameStateBlock(lines: string[]): string | undefined {
 }
 
 export async function gameStateText(): Promise<string | undefined> {
-  return gameStateBlock(inventoryLines(await readInventory()))
+  return gameStateBlock([...partyLines(await readParty()), ...inventoryLines(await readInventory())])
 }

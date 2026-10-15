@@ -2,6 +2,7 @@
 
 import { IDS } from '../keys.ts'
 import { inventoryPanel } from './inventoryPanel.ts'
+import { partyPanel } from './partyPanel.ts'
 
 let visible = false
 
@@ -9,32 +10,16 @@ export async function setStoryPanelsVisible(show: boolean): Promise<void> {
   if (show === visible) return
   // ui.register replaces every extension the script has (it would remove the sidebar panel), so
   // panels added later go through ui.update, which adds extensions alongside the existing ones.
-  if (show) await api.v1.ui.update([partyPanel(), await inventoryPanel(rebuildInventory)])
+  if (show) await api.v1.ui.update(await storyPanels())
   else await api.v1.ui.remove([IDS.partyPanel, IDS.inventoryPanel])
   visible = show
 }
 
-/** Rebuilds the Inventory tab after items are added or removed. */
-async function rebuildInventory(): Promise<void> {
-  if (visible) await api.v1.ui.update([await inventoryPanel(rebuildInventory)])
+/** Rebuilds the tabs after companions or items are added, removed or reordered. */
+async function rebuild(): Promise<void> {
+  if (visible) await api.v1.ui.update(await storyPanels())
 }
 
-function partyPanel(): UIExtensionScriptPanel & { id: string } {
-  return {
-    type: 'scriptPanel',
-    id: IDS.partyPanel,
-    name: 'Party',
-    iconId: 'users',
-    content: [
-      {
-        type: 'text',
-        markdown: true,
-        text: [
-          '**Party** (coming in Phase 3)',
-          '',
-          'Your companions will be listed here with their role, status (healthy, wounded…), attitude toward you and notes. Members marked *in party* are added to the AI\'s context every turn.',
-        ].join('\n'),
-      },
-    ],
-  }
+async function storyPanels(): Promise<(UIExtensionScriptPanel & { id: string })[]> {
+  return [await partyPanel(rebuild), await inventoryPanel(rebuild)]
 }

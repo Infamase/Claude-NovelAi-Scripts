@@ -6,10 +6,9 @@
 import { IDS, logError } from '../keys.ts'
 import { gameStateBlock } from '../state/gameState.ts'
 import { INV, addItem, adjustCount, inventoryLines, readInventory, removeItem, type Inventory, type Item } from '../state/inventory.ts'
+import { MUTED, debounced, forTemplate, previewSection } from './common.ts'
 
-const MUTED = { opacity: 0.7, fontSize: '0.85em' }
-
-let previewPending = false
+const schedulePreview = debounced(() => updatePreview())
 
 export async function inventoryPanel(rebuild: () => Promise<void>): Promise<UIExtensionScriptPanel & { id: string }> {
   const inv = await readInventory()
@@ -29,13 +28,7 @@ export async function inventoryPanel(rebuild: () => Promise<void>): Promise<UIEx
       },
       moneySection(edited),
       itemsSection(inv, rebuild, edited),
-      {
-        type: 'collapsibleSection',
-        title: 'What the AI sees',
-        iconId: 'eye',
-        initialCollapsed: true,
-        content: [{ type: 'text', text: `{{story:${INV.preview}}}`, style: { whiteSpace: 'pre-wrap', fontSize: '0.9em' } }],
-      },
+      previewSection(INV.preview),
     ],
   }
 }
@@ -148,23 +141,11 @@ function stepButton(text: string, key: string, delta: number, edited: () => void
   }
 }
 
-/** Refreshes the preview shortly after an edit, once the input has saved its value. */
-function schedulePreview(): void {
-  if (previewPending) return
-  previewPending = true
-  api.v1.timers
-    .setTimeout(() => {
-      previewPending = false
-      updatePreview().catch(logError)
-    }, 300)
-    .catch(logError)
-}
-
 export async function updatePreview(inv?: Inventory): Promise<void> {
   const current = inv ?? (await readInventory())
   const block = gameStateBlock(inventoryLines(current))
   const text = !current.share
     ? 'Nothing: sending the inventory is turned off above.'
     : (block ?? 'Nothing yet. Add money or an item, and it will be sent with every turn.')
-  await api.v1.storyStorage.set(INV.preview, text.replace(/\{\{/g, '{ {'))
+  await api.v1.storyStorage.set(INV.preview, forTemplate(text))
 }

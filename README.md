@@ -3,12 +3,12 @@
 A NovelAI user script for Text Adventure mode on Xialong or GLM 4.6:
 
 - **Stops at your turn.** The AI writes what happens because of your action, then stops. It doesn't write your character's words, thoughts, decisions or new actions, and it never asks "What do you do?"
-- **Party tab** in the bottom bar, fed into the story context. *(Phase 3)*
+- **Party tab** in the bottom bar: your companions, their condition and their attitude toward you, fed into the story context.
 - **Inventory tab** in the bottom bar: money in your own currency with a price guide, and items, fed into the story context.
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.3.0, Phase 2 (the Inventory tab)
+## Status: v0.4.0, Phase 3 (the Party tab)
 
 How each turn works:
 
@@ -18,7 +18,15 @@ How each turn works:
    - **the referee**, a quick second AI call, catches the subtle ones, like an unattributed line of your speech or an unmarked thought.
 3. **The cut.** Only the text before the first overstep reaches the editor. It's a normal generation, so Undo and Retry work as usual. If the very first sentence oversteps, nothing is added and the script asks the AI again automatically, up to twice.
 
-The Party tab is still a placeholder.
+## Party tab (bottom bar)
+
+- **Add companion**, then fill in their **Name** and **Who they are** ("elf ranger, your guide").
+- **Status** and **Attitude toward you**: type anything, or use the quick picks (Healthy, Wounded…; Hostile, Wary, Neutral, Friendly, Loyal).
+- **Notes**: personality, goals, secrets. Sent only when filled in.
+- **In party**: untick for someone who is away. They stay listed but aren't sent.
+- **Move up** / **Move down** / **Remove**, a **What the AI sees** preview, and **Tell the AI about my party** to stop sending.
+
+Companions speak and act for themselves; only your own character is protected.
 
 ## Inventory tab (bottom bar)
 
@@ -27,7 +35,7 @@ The Party tab is still a placeholder.
 - **Items**: name, quantity, **Equipped**, and an optional note that the AI sees while the item is equipped (`notched blade`).
 - **What the AI sees** shows exactly what is sent with each turn. **Tell the AI about my inventory** turns sending off.
 
-Update the tab yourself as you buy, find or use things; nothing is tracked automatically yet.
+Update the tabs yourself as things change in the story; nothing is tracked automatically yet. Each turn, the party and then the inventory are sent right after your action, before the narration rules.
 
 ## Install
 

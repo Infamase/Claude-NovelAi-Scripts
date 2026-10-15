@@ -1,6 +1,8 @@
 // The player's inventory: money, a price guide, and items. Kept in the story, one storage key per
 // field, so the Inventory tab's inputs can bind to them directly and update live.
 
+import { count, idList, text } from './store.ts'
+
 export type Item = { id: string; name: string; quantity: number; equipped: boolean; note: string }
 
 export type Inventory = {
@@ -118,18 +120,6 @@ export function priceList(guide: string): string {
     .join(', ')
 }
 
-async function itemIds(): Promise<string[]> {
-  const ids = await api.v1.storyStorage.get(INV.items)
-  return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []
-}
-
-function text(value: unknown): string {
-  return typeof value === 'string' ? value : value == null ? '' : String(value)
-}
-
-/** A whole, non-negative number from storage, which may hold a number or the text of an input. */
-function count(value: unknown, fallback: number): number {
-  if (value === '' || value == null) return fallback
-  const n = Number(value)
-  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : fallback
+function itemIds(): Promise<string[]> {
+  return idList(INV.items)
 }
