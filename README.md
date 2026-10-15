@@ -2,15 +2,23 @@
 
 A NovelAI user script for Text Adventure mode on Xialong or GLM 4.6:
 
-- **Stops at your turn.** The AI writes what happens because of your action, then stops. It doesn't write your next words or moves, and it never asks "What do you do?" *(Phase 1)*
+- **Stops at your turn.** The AI writes what happens because of your action, then stops. It doesn't write your character's words, thoughts, decisions or new actions, and it never asks "What do you do?"
 - **Party tab** in the bottom bar, fed into the story context. *(Phase 3)*
 - **Inventory tab** in the bottom bar, fed into the story context. *(Phase 2)*
 
 See [PLAN.md](PLAN.md) for the full design and roadmap.
 
-## Status: v0.1.2, Phase 0 preview
+## Status: v0.2.0, Phase 1 (the turn guard)
 
-This version is the shell: a settings panel, placeholder Party and Inventory tabs, and a **stop test** that checks how NovelAI handles the script cutting a response short.
+How each turn works:
+
+1. **Rules for the AI.** Before every reply, short narration rules are added after your input in the context. You can see them in NovelAI's Context viewer.
+2. **A check before anything appears.** The script holds the reply until the AI finishes. NovelAI shows replies all at once anyway, so this looks the same on screen. Then:
+   - **pattern rules** catch the clear cases: your character speaking, thinking or deciding, and any form of "What do you do?";
+   - **the referee**, a quick second AI call, catches the subtle ones, like an unattributed line of your speech or an unmarked thought.
+3. **The cut.** Only the text before the first overstep reaches the editor. It's a normal generation, so Undo and Retry work as usual. If the very first sentence oversteps, nothing is added and you're asked to press Retry.
+
+The Party and Inventory tabs are still placeholders.
 
 ## Install
 
@@ -19,19 +27,18 @@ This version is the shell: a settings panel, placeholder Party and Inventory tab
 3. **Import** the file as an **account script**.
 4. Open a Text Adventure story. In the right sidebar, open the **"…"** tab, then **Text Adventure+**, and tick **Enable for this story**.
 
-The story must use a chat-endpoint model (**Xialong** or **GLM 4.6**), and streaming should be on.
+The story must use a chat-endpoint model (**Xialong** or **GLM 4.6**).
 
 To update, import the new file the same way. It has the same script id, so it replaces the old version.
 
 If a script ever makes NovelAI unusable, add `?noscript=true` to the end of the URL and reload. Scripts are skipped, so you can disable the bad one.
 
-## Phase 0 checks
+## Settings (right sidebar → Text Adventure+)
 
-1. After you tick **Enable for this story**, **Party** and **Inventory** tabs appear just above the bottom controls. Untick it and they disappear.
-2. Run the stop test:
-   1. In the Text Adventure+ sidebar panel, open **Diagnostics: stop test** and tick **Run the stop test on my next three turns**.
-   2. Take three normal turns with actions that should get several sentences back. Each turn tries a different way of cutting the response, and a notification tells you when each one is done.
-   3. Press **Copy report** and send the report to Claude.
+- **Enable for this story**: turns the script on for the open story.
+- **Referee**: double-checks each reply with a quick AI call. It adds a second or two per turn and uses a small part of the script's AI allowance. On by default.
+- **Strict**: also cuts your character's physical reactions (a flinch, a cough). Off by default.
+- **Last turn**: what was kept, where the cut was and why. **Copy details** copies the whole reply sentence by sentence with the cut marked. Send it to Claude when a turn was cut wrongly or should have been cut.
 
 ## Development
 
@@ -40,7 +47,7 @@ npm install
 npm run check   # typecheck + tests + build
 ```
 
-- `src/`: TypeScript source. `src/main.ts` is the entry point.
-- `tests/`: unit tests (Node's built-in test runner). `tests/helpers/mockApi.ts` emulates NovelAI's hooks so the script's logic can run outside NovelAI.
+- `src/`: TypeScript source. `src/main.ts` is the entry point, and `src/guard/` holds the turn guard.
+- `tests/`: unit tests (Node's built-in test runner). `tests/helpers/mockApi.ts` stands in for NovelAI's API, following what the Phase 0 tests showed about it, so whole turns can run outside NovelAI.
 - `types/script-types.d.ts`: NovelAI's official API typings, from <https://novelai.net/scripting/types/script-types.d.ts>.
 - `scripts/build.mjs`: bundles everything into `dist/text-adventure-plus.naiscript` and adds the script header (name, version, id) from `package.json`.
